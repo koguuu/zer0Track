@@ -1,0 +1,3 @@
+# Python 3.10+. Standalone generation/baseline uses the standard library.
+# The uploaded Bhone models require Pydantic v2 for --require-team-schema/--backend.
+pydantic>=2,<3

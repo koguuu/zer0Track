@@ -1,0 +1,10 @@
+﻿profile,mode,total_cases,evaluated_cases,coverage_percent,awaiting_pipeline,adapter_errors,invalid_proof_cases_evaluated,valid_proof_cases_evaluated,flagged_invalid_proofs,missed_invalid_proofs,false_alerts,invalid_proof_detection_percent,false_alert_percent,unsupported_acceptances,unresolved_cases,tool_calls,mean_time_to_recommendation_ms,legitimate_handoff_review_burden_percent,llm_cases_service_reported,agent_invoked_cases,protocol_violation_cases
+strict,scan_only,20,20,100.0,0,0,14,6,1,13,0,7.14,0.0,19,0,0,0.1344,0.0,0,0,0
+strict,rules_only,20,20,100.0,0,0,14,6,13,1,2,92.86,33.33,0,7,0,6.0239,50.0,0,0,0
+strict,rules_and_llm,20,0,0.0,20,0,0,0,0,0,0,,,0,0,0,,,0,0,0
+balanced,scan_only,20,20,100.0,0,0,14,6,1,13,0,7.14,0.0,19,0,0,0.1092,0.0,0,0,0
+balanced,rules_only,20,20,100.0,0,0,14,6,13,1,2,92.86,33.33,0,7,0,0.3204,50.0,0,0,0
+balanced,rules_and_llm,20,0,0.0,20,0,0,0,0,0,0,,,0,0,0,,,0,0,0
+loose,scan_only,20,20,100.0,0,0,14,6,1,13,0,7.14,0.0,19,0,0,0.1093,0.0,0,0,0
+loose,rules_only,20,20,100.0,0,0,14,6,13,1,2,92.86,33.33,0,7,0,0.3211,50.0,0,0,0
+loose,rules_and_llm,20,0,0.0,20,0,0,0,0,0,0,,,0,0,0,,,0,0,0
