@@ -1,1 +1,9 @@
-fatal: invalid object name 'origin/feature/agent'.
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite3
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+.DS_Store
