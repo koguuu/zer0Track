@@ -1,7 +1,105 @@
-"""
-FastAPI app.
+"""FastAPI endpoint layer for zer0track's simulated-delivery prototype.
+
+Endpoints in team's outline:
 POST /cases/{shipment_id}/evaluate
 POST /cases/{shipment_id}/approve
 GET  /cases/{shipment_id}
-Owner: Bhone
+
+All credentials here are SYNTHETIC demo secrets supplied via environment
+variables. Replace this mock authenticator with real IAM for production.
 """
+from __future__ import annotations
+
+import hmac
+import json
+import os
+from functools import lru_cache
+
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
+
+from backend.models import ApprovalRequest, CaseView, ShipmentEvent
+from backend.storage import BackendError, Store
+
+app = FastAPI(title="zer0track backend", version="0.1.0")
+
+
+@lru_cache(maxsize=1)
+def get_store() -> Store:
+    return Store(os.environ.get("ZTRACK_DB_PATH", "./var/zer0track.sqlite"))
+
+
+def _lookup_credentials(env_key: str, principal: str, secret: str) -> bool:
+    try:
+        credentials = json.loads(os.environ.get(env_key, "{}"))
+    except json.JSONDecodeError:
+        return False
+    correct = credentials.get(principal)
+    return bool(isinstance(correct, str) and correct and hmac.compare_digest(correct, secret))
+
+
+def courier_auth(
+    x_courier_id: str | None = Header(default=None),
+    x_courier_token: str | None = Header(default=None),
+) -> str:
+    if not x_courier_id or not x_courier_token or not _lookup_credentials(
+        "ZTRACK_COURIER_TOKENS", x_courier_id, x_courier_token
+    ):
+        raise HTTPException(status_code=401, detail="Invalid courier demo credentials")
+    return x_courier_id
+
+
+def supervisor_auth(
+    x_operator_id: str | None = Header(default=None),
+    x_supervisor_token: str | None = Header(default=None),
+) -> str:
+    if not x_operator_id or not x_supervisor_token or not _lookup_credentials(
+        "ZTRACK_SUPERVISOR_TOKENS", x_operator_id, x_supervisor_token
+    ):
+        raise HTTPException(status_code=401, detail="Invalid supervisor demo credentials")
+    return x_operator_id
+
+
+def service_auth(x_service_key: str | None = Header(default=None)) -> None:
+    expected = os.environ.get("ZTRACK_SERVICE_KEY", "")
+    if not expected or not x_service_key or not hmac.compare_digest(x_service_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid service credential")
+
+
+@app.exception_handler(BackendError)
+async def backend_error_handler(_request, exc: BackendError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "mode": "synthetic-prototype"}
+
+
+@app.post("/cases/{shipment_id}/evaluate", response_model=CaseView)
+def evaluate(shipment_id: str, event: ShipmentEvent,
+             handler_id: str = Depends(courier_auth), store: Store = Depends(get_store)):
+    if shipment_id != event.shipment_id:
+        raise HTTPException(status_code=400, detail="Path shipment ID differs from body")
+    return store.evaluate_case(event, handler_id)
+
+
+@app.post("/cases/{shipment_id}/approve", response_model=CaseView)
+def approve(shipment_id: str, request: ApprovalRequest,
+            operator_id: str = Depends(supervisor_auth), store: Store = Depends(get_store)):
+    return store.approve_case(shipment_id, request, operator_id)
+
+
+@app.get("/cases/{shipment_id}", response_model=CaseView)
+def get_case(shipment_id: str, _auth: None = Depends(service_auth),
+             store: Store = Depends(get_store)):
+    return store.get_case(shipment_id)
+
+
+@app.get("/cases/{shipment_id}/audit")
+def audit_trail(shipment_id: str, _auth: None = Depends(service_auth),
+                store: Store = Depends(get_store)):
+    from backend.audit import get_audit_trail, verify_audit_chain
+    with store.connect() as conn:
+        return {"chain_valid": verify_audit_chain(conn, os.environ.get("ZTRACK_AUDIT_ANCHOR_PATH")),
+                "events": get_audit_trail(shipment_id, conn)}
