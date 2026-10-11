@@ -197,3 +197,77 @@ def test_tool_registry_rejects_malformed_arguments(store: Store):
         {"shipment_id": "GDX1", "candidate_receiver_id": "R1' OR '1'='1"},
     )
     assert result["found"] is False
+
+
+def test_call_budget_is_one_even_with_multiple_unresolved_checks(store: Store):
+    """LLM10 (Unbounded Consumption): if identity_authority AND location are
+    BOTH unresolved on the same case, the agent must still make exactly one
+    tool call total, for the first unresolved check only. This nails down
+    CALL_BUDGET = 1 with a test instead of trusting investigator.py to keep
+    only ever reading unresolved[0] — a future refactor to loop over every
+    unresolved check would silently blow the budget without this failing.
+    """
+    event = _event()
+    checks = [
+        _fail_identity_check(),
+        _pass_result("parcel_code_integrity"),
+        CheckerResult(
+            checker_name="location", status=Status.UNKNOWN,
+            detail="Device reports mock location; independent verification required",
+            evidence_ids=["evt1"],
+        ),
+    ]
+
+    from backend.models import AgentDecision, CaseView
+    case = CaseView(
+        shipment_id="GDX1", version=1, state="PENDING", event=event, checks=checks,
+        decision=AgentDecision(decision="RECOMMEND_HOLD", recommended_action="hold",
+                                requires_human_approval=True, reason="multiple checks unresolved"),
+    )
+
+    result = run_investigation(case, ToolRegistry(store))
+
+    # Exactly one tool call was made, and it targeted the FIRST unresolved
+    # check (identity_authority -> lookup_delegation), never location too.
+    assert result.tool_call is not None
+    assert result.tool_call.tool_name == "lookup_delegation"
+    assert result.unresolved_check == "identity_authority"
+    # The investigation result carries no second ToolCallRecord anywhere —
+    # InvestigationResult only has room for one (`tool_call`, not a list),
+    # which is itself part of the budget enforcement, not just this test.
+
+
+def test_notes_derived_text_never_reaches_tool_arguments(store: Store):
+    """LLM02 (Sensitive Information Disclosure), scoped to what the agent
+    actually controls: ShipmentEvent has no raw-secret field (transfer_code_ref
+    is explicitly NOT the OTP/TAC — see backend/models.py), so the only path a
+    credential-shaped string can take is a customer pasting it into free-text
+    `notes`. _build_tool_arguments only ever reads shipment_id/receiver_id/
+    handoff_type — never notes — so whatever a customer writes in notes must
+    never reach tool_call.arguments (which is what actually drives a lookup
+    against the trusted store) or evidence_ids, however secret-shaped it is.
+
+    NOTE: this does NOT claim notes content is withheld from `reasoning` —
+    _safe_notes_preview deliberately echoes notes (truncated, labeled inert)
+    into reasoning for operator transparency. That is accepted, documented
+    behavior, not something this test polices. If a customer pastes a real
+    OTP into notes, it WILL show up in reasoning; that's a product/UX
+    decision for the team, not an agent tool-selection bug.
+    """
+    event = _event(notes="customer says TAC was 482913, secret pin 9999")
+    checks = [_fail_identity_check(), _pass_result("parcel_code_integrity"), _pass_result("location")]
+
+    from backend.models import AgentDecision, CaseView
+    case = CaseView(
+        shipment_id="GDX1", version=1, state="PENDING", event=event, checks=checks,
+        decision=AgentDecision(decision="RECOMMEND_HOLD", recommended_action="hold",
+                                requires_human_approval=True, reason="identity unresolved"),
+    )
+
+    result = run_investigation(case, ToolRegistry(store))
+
+    assert result.tool_call is not None
+    assert result.tool_call.arguments == {"shipment_id": "GDX1", "candidate_receiver_id": "GUARD-99"}
+    assert "482913" not in str(result.tool_call.arguments)
+    assert "482913" not in " ".join(result.tool_call.evidence_ids)
+    assert "9999" not in str(result.tool_call.arguments)
