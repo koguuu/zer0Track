@@ -1,0 +1,89 @@
+{
+  "fixture_format": "raja-draft-v2",
+  "case_id": "C03",
+  "source": "synthetic",
+  "schema_validation": {
+    "shipment_event": "model_validated",
+    "courier_history": "model_validated",
+    "shipment_model": "backend.models:ShipmentEvent",
+    "history_model": "backend.models:CourierHistory",
+    "trusted_shipment": "model_validated",
+    "transfer_code": "model_validated_when_present",
+    "schema_lock_confirmed": false,
+    "validation_mode": "required_models",
+    "lookup_contract": "synthetic fixture records; actual Kogu tool contract pending",
+    "fixture_context": "synthetic registry seeds; never accepted from a public courier request"
+  },
+  "shipment_event": {
+    "shipment_id": "SYN-S003",
+    "parcel_id": "SYN-P003",
+    "event_id": "SYN-E003",
+    "transaction_id": "SYN-T003",
+    "handoff_type": "warehouse",
+    "event_timestamp": "2026-10-11T04:00:00Z",
+    "receipt_timestamp": "2026-10-11T04:00:00Z",
+    "handler_id": "SYN-H01",
+    "receiver_id": "SYN-R01",
+    "transfer_code_ref": "SYN-CR003",
+    "location": {
+      "latitude": 3.139,
+      "longitude": 101.6869,
+      "accuracy_m": 10.0,
+      "source": "synthetic",
+      "recorded_at": "2026-10-11T03:59:40Z",
+      "mock_location_flag": false
+    },
+    "notes": null,
+    "photo_metadata_ref": null,
+    "signed_receipt_status": "absent"
+  },
+  "courier_history": {
+    "courier_id": "SYN-H01",
+    "recent_delivery_count": 40,
+    "recent_review_count": 1,
+    "observation_window_days": 30
+  },
+  "fixture_context": {
+    "reference_time": "2026-10-11T04:00:00Z",
+    "trusted_shipment": {
+      "shipment_id": "SYN-S003",
+      "parcel_id": "SYN-P003",
+      "assigned_handler_id": "SYN-H01",
+      "current_custodian_id": "SYN-H01",
+      "authorized_receiver_ids": [
+        "SYN-R01"
+      ],
+      "authorized_delegate_ids": [],
+      "checkpoints": [
+        {
+          "checkpoint_id": "MAIN",
+          "handoff_type": "warehouse",
+          "latitude": 3.139,
+          "longitude": 101.6869,
+          "radius_m": 80.0
+        }
+      ],
+      "custody_state": "PENDING"
+    },
+    "transfer_code": {
+      "code_ref": "SYN-CR003",
+      "shipment_id": "SYN-S003",
+      "transaction_id": "SYN-T003",
+      "receiver_id": "SYN-R01",
+      "issued_at": "2026-10-11T03:45:00Z",
+      "expires_at": "2026-10-11T04:15:00Z",
+      "consumed_at": null
+    },
+    "authenticated_handler_id": "SYN-H01",
+    "lookups": {
+      "lookup_delegation": null,
+      "lookup_checkpoint": null,
+      "lookup_custody_history": null
+    },
+    "photo_metadata": null,
+    "baseline_scan": {
+      "scanned_parcel_id": "SYN-P003",
+      "manifest_parcel_id": "SYN-P003"
+    }
+  }
+}

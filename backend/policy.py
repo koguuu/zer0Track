@@ -22,6 +22,18 @@ def evaluate_policy(checks: list[CheckerResult]) -> AgentDecision:
     if states["identity_authority"] == Status.FAIL:
         return AgentDecision(decision="RECOMMEND_HOLD", recommended_action="hold",
             requires_human_approval=True, reason="Trusted identity or receiver authority failed", **base)
+    if states["identity_authority"] == Status.UNKNOWN:
+        # checkers.py deliberately fails this CLOSED as UNKNOWN rather than
+        # FAIL -- an absent delegation record isn't proof of a denial (see
+        # its own comment). But "we cannot verify this receiver is
+        # authorized" still needs a human before anything proceeds, same as
+        # a confirmed FAIL did; letting it fall through to the generic
+        # REQUEST_VERIFICATION/requires_human_approval=False branch below
+        # would silently downgrade an unverifiable receiver to "no approval
+        # needed", which is wrong regardless of why identity is unresolved.
+        return AgentDecision(decision="RECOMMEND_HOLD", recommended_action="hold",
+            requires_human_approval=True,
+            reason="Trusted identity or receiver authority could not be verified", **base)
     if all(state == Status.PASS for state in states.values()):
         return AgentDecision(decision="ACCEPT_READY", recommended_action="accept",
             requires_human_approval=False, reason="All three mandatory checks passed; revalidate at commit", **base)

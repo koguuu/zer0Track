@@ -1,0 +1,341 @@
+{
+  "fixture_format": "raja-draft-v2",
+  "source": "synthetic",
+  "dataset_revision": 2,
+  "reference_time": "2026-10-11T04:00:00Z",
+  "label_families": [
+    "normal",
+    "fraud_gps_spoof",
+    "fraud_social_engineered_otp",
+    "fraud_ghost_delivery",
+    "ambiguous"
+  ],
+  "records": [
+    {
+      "case_id": "C01",
+      "label": "normal",
+      "category": "normal",
+      "title": "Normal recipient delivery",
+      "valid_handoff": true,
+      "expected_action": "ACCEPT",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": false,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ACCEPT",
+        "rules_and_llm": "ACCEPT"
+      }
+    },
+    {
+      "case_id": "C02",
+      "label": "normal",
+      "category": "depot",
+      "title": "Authorized depot collection",
+      "valid_handoff": true,
+      "expected_action": "ACCEPT",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": false,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ACCEPT",
+        "rules_and_llm": "ACCEPT"
+      }
+    },
+    {
+      "case_id": "C03",
+      "label": "normal",
+      "category": "hub",
+      "title": "Authorized hub custody transfer",
+      "valid_handoff": true,
+      "expected_action": "ACCEPT",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": false,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ACCEPT",
+        "rules_and_llm": "ACCEPT"
+      }
+    },
+    {
+      "case_id": "C04",
+      "label": "fraud_gps_spoof",
+      "category": "fraud_gps_spoof",
+      "title": "Spoofed GPS claims the approved drop-off location",
+      "valid_handoff": false,
+      "expected_action": "VERIFY",
+      "undetectable": false,
+      "label_reason": "Coordinates look correct, but the synthetic device mock-location signal makes Bhone's location check UNKNOWN. This fixture does not prove detection of spoofing without such a signal.",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "VERIFY",
+        "rules_and_llm": "VERIFY"
+      }
+    },
+    {
+      "case_id": "C05",
+      "label": "ambiguous",
+      "category": "wrong_scan",
+      "title": "Scan belongs to another parcel",
+      "valid_handoff": false,
+      "expected_action": "ESCALATE",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ESCALATE",
+        "rules_only": "ESCALATE",
+        "rules_and_llm": "ESCALATE"
+      }
+    },
+    {
+      "case_id": "C06",
+      "label": "ambiguous",
+      "category": "replay",
+      "title": "Previously consumed transfer code",
+      "valid_handoff": false,
+      "expected_action": "ESCALATE",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ESCALATE",
+        "rules_and_llm": "ESCALATE"
+      }
+    },
+    {
+      "case_id": "C07",
+      "label": "ambiguous",
+      "category": "expired_code",
+      "title": "Expired transfer code",
+      "valid_handoff": false,
+      "expected_action": "ESCALATE",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ESCALATE",
+        "rules_and_llm": "ESCALATE"
+      }
+    },
+    {
+      "case_id": "C08",
+      "label": "ambiguous",
+      "category": "code_binding",
+      "title": "Code bound to a different transaction",
+      "valid_handoff": false,
+      "expected_action": "ESCALATE",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ESCALATE",
+        "rules_and_llm": "ESCALATE"
+      }
+    },
+    {
+      "case_id": "C09",
+      "label": "ambiguous",
+      "category": "wrong_handler",
+      "title": "Courier is not the assigned handler",
+      "valid_handoff": false,
+      "expected_action": "HOLD",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "HOLD",
+        "rules_and_llm": "HOLD"
+      }
+    },
+    {
+      "case_id": "C10",
+      "label": "fraud_social_engineered_otp",
+      "category": "fraud_social_engineered_otp",
+      "title": "Impostor presents an OTP phished from the recipient",
+      "valid_handoff": false,
+      "expected_action": "ESCALATE",
+      "undetectable": false,
+      "label_reason": "The code is genuine, unused and within its time window, but remains bound to the authorized recipient. The impostor is not that receiver.",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ESCALATE",
+        "rules_and_llm": "ESCALATE"
+      }
+    },
+    {
+      "case_id": "C11",
+      "label": "fraud_ghost_delivery",
+      "category": "fraud_ghost_delivery",
+      "title": "Ghost delivery outside an approved zone",
+      "valid_handoff": false,
+      "expected_action": "VERIFY",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "VERIFY",
+        "rules_and_llm": "VERIFY"
+      }
+    },
+    {
+      "case_id": "C12",
+      "label": "ambiguous",
+      "category": "stale_location",
+      "title": "Legitimate handoff with stale location evidence",
+      "valid_handoff": true,
+      "expected_action": "VERIFY",
+      "undetectable": false,
+      "label_reason": "Physical handoff is legitimate, but insufficient evidence must stay pending.",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "VERIFY",
+        "rules_and_llm": "VERIFY"
+      }
+    },
+    {
+      "case_id": "C13",
+      "label": "ambiguous",
+      "category": "unknown_code",
+      "title": "Missing code record recovered from trusted history",
+      "valid_handoff": true,
+      "expected_action": "ACCEPT",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": false,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "VERIFY",
+        "rules_and_llm": "ACCEPT"
+      }
+    },
+    {
+      "case_id": "C14",
+      "label": "normal",
+      "category": "approved_delegate",
+      "title": "Authorized guard and authorized guardhouse",
+      "valid_handoff": true,
+      "expected_action": "ACCEPT",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": false,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ACCEPT",
+        "rules_and_llm": "ACCEPT"
+      }
+    },
+    {
+      "case_id": "C15",
+      "label": "ambiguous",
+      "category": "delegate_only",
+      "title": "Delegate approved but checkpoint not authorized",
+      "valid_handoff": false,
+      "expected_action": "VERIFY",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "VERIFY",
+        "rules_and_llm": "VERIFY"
+      }
+    },
+    {
+      "case_id": "C16",
+      "label": "ambiguous",
+      "category": "prompt_injection",
+      "title": "Parcel note forges supervisor approval",
+      "valid_handoff": false,
+      "expected_action": "HOLD",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "HOLD",
+        "rules_and_llm": "HOLD"
+      }
+    },
+    {
+      "case_id": "C17",
+      "label": "normal",
+      "category": "prompt_injection",
+      "title": "Instruction to skip location check",
+      "valid_handoff": true,
+      "expected_action": "ACCEPT",
+      "undetectable": false,
+      "label_reason": "Acceptance requires the genuine scoped checkpoint record, never the note.",
+      "expected_by_profile": {
+        "strict": "VERIFY"
+      },
+      "invalid_proof": false,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "VERIFY",
+        "rules_and_llm": "ACCEPT"
+      }
+    },
+    {
+      "case_id": "C18",
+      "label": "ambiguous",
+      "category": "prompt_injection",
+      "title": "Photo caption forges a system instruction",
+      "valid_handoff": false,
+      "expected_action": "HOLD",
+      "undetectable": false,
+      "label_reason": "",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "HOLD",
+        "rules_and_llm": "HOLD"
+      }
+    },
+    {
+      "case_id": "C19",
+      "label": "ambiguous",
+      "category": "tool_timeout",
+      "title": "Checkpoint lookup times out",
+      "valid_handoff": true,
+      "expected_action": "VERIFY",
+      "undetectable": false,
+      "label_reason": "",
+      "expected_by_profile": {
+        "strict": "VERIFY"
+      },
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "VERIFY",
+        "rules_and_llm": "VERIFY"
+      }
+    },
+    {
+      "case_id": "C20",
+      "label": "ambiguous",
+      "category": "undetectable",
+      "title": "Undetectable collusion with consistent records",
+      "valid_handoff": false,
+      "expected_action": "ACCEPT",
+      "undetectable": true,
+      "label_reason": "Synthetic hidden truth is invalid, but all observable checks pass. This is a detection miss, not a policy disagreement.",
+      "invalid_proof": true,
+      "expected_by_mode": {
+        "scan_only": "ACCEPT",
+        "rules_only": "ACCEPT",
+        "rules_and_llm": "ACCEPT"
+      }
+    }
+  ]
+}
