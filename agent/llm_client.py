@@ -121,10 +121,13 @@ class GroqInjectionClassifier:
     model="openai/gpt-oss-20b" -- all 4 of this project's real injection
     test cases (clean note, fake approval claim, skip-check instruction,
     forged system text) classified correctly. NOTE: gpt-oss models emit
-    reasoning tokens before their final answer, so max_tokens must stay
-    generous (500, not ~100) or the JSON gets truncated mid-response --
-    this bit us during verification, hence the regex-based extraction
-    below instead of a strict json.loads on the raw content.
+    reasoning tokens before their final answer, and the amount of
+    reasoning varies per prompt -- max_tokens=500 was occasionally not
+    enough headroom and truncated the JSON mid-response on some runs
+    (same wording, same key, different call), so this was raised to 1200
+    for a wider safety margin. Also uses regex-based JSON extraction
+    instead of a strict json.loads on the raw content, since the
+    reasoning preamble means the response isn't pure JSON.
 
     Requires ZTRACK_LLM_API_KEY (falls back to GROQ_API_KEY). Which
     specific models are available depends on the account -- call
@@ -150,7 +153,7 @@ class GroqInjectionClassifier:
                 headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
                 json={
                     "model": self._model,
-                    "max_tokens": 500,
+                    "max_tokens": 1200,
                     "temperature": 0,
                     "messages": [
                         {"role": "system", "content": _SYSTEM_PROMPT},
