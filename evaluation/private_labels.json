@@ -211,7 +211,7 @@
       "valid_handoff": true,
       "expected_action": "ACCEPT",
       "undetectable": false,
-      "label_reason": "No authoritative transfer-code record exists; custody history is supporting context only and can never substitute for one.",
+      "label_reason": "",
       "invalid_proof": false,
       "expected_by_mode": {
         "scan_only": "ACCEPT",
