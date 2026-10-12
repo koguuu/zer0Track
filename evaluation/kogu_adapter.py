@@ -13,11 +13,17 @@ audit chain -- none of which belong in an evaluation_only comparator).
 
 Honesty rules this file follows, because Raja's harness checks for exactly
 these dishonesties:
-  - llm_used is ALWAYS False. Tool selection is a fixed, hardcoded mapping
-    (see agent/investigator.py's own docstring) -- there is no real LLM
-    call anywhere in this codebase, and claiming otherwise here would trip
-    "inconsistent_llm_usage_metadata" the moment agent_invoked is also True,
-    or just be a lie if it weren't.
+  - llm_used reflects whether a real LLM call actually ran for THIS row,
+    nothing more. Tool SELECTION is still always a fixed, hardcoded mapping
+    (see agent/investigator.py's own docstring) -- no LLM ever picks a tool
+    or influences a decision. The one real LLM call in this codebase is
+    agent.injection_detector's advisory notes classifier (see its module
+    docstring for the isolation guarantee); llm_used is True only when that
+    classifier actually ran and returned a signal for this row, which
+    requires both an LLM_client configured (ZTRACK_LLM_API_KEY /
+    ANTHROPIC_API_KEY set) and event.notes present. With no key configured
+    -- the default in this sandbox and in CI -- it stays False, same as
+    before, and every existing test keeps passing unchanged.
   - agent_invoked is True only when run_investigation actually ran (i.e.
     was not skipped by a policy gate below) -- not merely because this
     adapter was called.
@@ -34,6 +40,7 @@ these dishonesties:
 from __future__ import annotations
 
 import copy
+import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -86,7 +93,18 @@ def evaluate_with_kogu(*, fixture, mode, policy_config, evaluation_only):
     from backend.storage import Store
 
     from agent.investigator import run_investigation
+    from agent.llm_client import AnthropicInjectionClassifier
     from agent.tools import ToolRegistry
+
+    # Optional and advisory-only (see agent/injection_detector.py) -- None
+    # whenever no key is configured, which is the default here. Never
+    # affects checks/action/tool selection; only whether injection_signal
+    # gets populated below and, honestly, whether llm_used is True.
+    llm_client = (
+        AnthropicInjectionClassifier()
+        if (os.environ.get("ZTRACK_LLM_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
+        else None
+    )
 
     event = ShipmentEvent.model_validate(fixture["shipment_event"])
     CourierHistory.model_validate(fixture["courier_history"])  # validated, not consumed by any mandatory check
@@ -146,7 +164,7 @@ def evaluate_with_kogu(*, fixture, mode, policy_config, evaluation_only):
             shipment_id=event.shipment_id, version=1, state="PENDING",
             event=event_for_investigation, checks=checks, decision=decision,
         )
-        investigation = run_investigation(case, ToolRegistry(store))
+        investigation = run_investigation(case, ToolRegistry(store), llm_client=llm_client)
 
     tool_calls = []
     if investigation.tool_call is not None:
@@ -167,7 +185,11 @@ def evaluate_with_kogu(*, fixture, mode, policy_config, evaluation_only):
         "tool_calls": tool_calls,
         "executed": False,
         "requires_human_approval": decision.requires_human_approval,
-        "llm_used": False,  # see module docstring: never true, there is no real LLM call
+        # True only when the injection-signal classifier actually ran and
+        # returned a result for this row -- see module docstring. Note: the
+        # classifier's verdict never appears in "action"/"checks" above,
+        # which come from decision/checks computed before it ever runs.
+        "llm_used": investigation.injection_signal is not None,
         "agent_invoked": True,
         "notes_exposed": notes_exposed,
         "explanation": explanation,
@@ -180,6 +202,11 @@ def evaluate_with_kogu(*, fixture, mode, policy_config, evaluation_only):
         # by hand -- _validate_response ignores unknown keys.
         "suggests_resolved": investigation.suggests_resolved,
         "unresolved_check": investigation.unresolved_check,
+        "injection_signal": (
+            investigation.injection_signal.model_dump(mode="json")
+            if investigation.injection_signal is not None
+            else None
+        ),
     }
 
 

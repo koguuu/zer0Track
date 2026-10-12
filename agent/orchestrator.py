@@ -26,6 +26,7 @@ from backend.storage import Store
 
 from agent.audit_log import log_investigation
 from agent.investigator import run_investigation
+from agent.llm_client import LLMClient
 from agent.models import InvestigationResult
 from agent.recheck_client import RecheckUnavailable, request_recheck
 from agent.tools import ToolRegistry
@@ -56,7 +57,9 @@ def _recheck_reason(investigation: InvestigationResult) -> str:
     return reason[:REASON_MAX_CHARS]
 
 
-def investigate_and_maybe_recheck(case: CaseView, store: Store) -> OrchestrationResult:
+def investigate_and_maybe_recheck(
+    case: CaseView, store: Store, *, llm_client: LLMClient | None = None
+) -> OrchestrationResult:
     """Runs one investigation pass, best-effort logs it to the audit chain,
     and — only if the investigation suggests the unresolved check may now
     resolve — asks the backend for an authenticated recheck. Never raises:
@@ -64,8 +67,11 @@ def investigate_and_maybe_recheck(case: CaseView, store: Store) -> Orchestration
     OrchestrationResult rather than propagated, because neither step may be
     allowed to take down whatever triggered the investigation in the first
     place (that caller still has an InvestigationResult either way).
+
+    `llm_client` is optional and purely advisory (see injection_detector.py):
+    passing one or not never changes recheck_requested/audit_logged above.
     """
-    investigation = run_investigation(case, ToolRegistry(store))
+    investigation = run_investigation(case, ToolRegistry(store), llm_client=llm_client)
 
     audit_logged = False
     try:

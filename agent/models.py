@@ -41,6 +41,23 @@ class ToolCallRecord(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+class InjectionSignal(StrictModel):
+    """Advisory-only output of agent.injection_detector's LLM classifier.
+
+    See agent/injection_detector.py's module docstring for the isolation
+    guarantee: this is attached to InvestigationResult for the operator and
+    the audit log, and nothing else. No field here is ever read by
+    tool-selection logic or backend.policy.
+    """
+
+    flagged: bool
+    category: Literal[
+        "none", "fake_approval_claim", "instruction_to_skip_check",
+        "forged_system_text", "other_manipulation_attempt",
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class InvestigationResult(StrictModel):
     """Advisory output of one investigation pass over a case.
 
@@ -57,3 +74,4 @@ class InvestigationResult(StrictModel):
     reasoning: str
     unresolved_questions: list[str] = Field(default_factory=list)
     suggests_resolved: bool = False
+    injection_signal: InjectionSignal | None = None

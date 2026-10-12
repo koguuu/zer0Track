@@ -32,6 +32,14 @@ Hard rules (enforced by code, verified by injection_tests.py):
     execute anything. backend.policy.evaluate_policy() remains the sole
     source of the actual decision; InvestigationResult is a recommendation
     attached for the human reviewer, nothing more.
+  - An optional LLM classifier (agent/injection_detector.py) may run on
+    `event.notes` to populate InvestigationResult.injection_signal, purely
+    as an advisory annotation for the operator/audit log. It runs
+    independently of, and has zero influence on, tool selection, the
+    _CHECK_TO_TOOL mapping, _RESOLVABLE_DETAILS gating, or
+    `suggests_resolved` above -- see injection_detector.py's module
+    docstring for the isolation guarantee and
+    injection_detector_tests.py for the test that proves it.
 
 STATUS (2026-10-12, after Bhone's backend fixes + agent/orchestrator.py):
 backend.checkers now fails identity_authority CLOSED as UNKNOWN rather than
@@ -65,6 +73,8 @@ from __future__ import annotations
 
 from backend.models import CaseView, Status
 
+from agent.injection_detector import detect_injection_signal
+from agent.llm_client import LLMClient
 from agent.models import InvestigationResult, ToolCallRecord, ToolName
 from agent.tools import ToolRegistry
 
@@ -134,7 +144,9 @@ def _build_tool_arguments(tool_name: ToolName, case: CaseView) -> dict:
     raise ValueError(f"Unmapped tool: {tool_name}")  # unreachable given _CHECK_TO_TOOL
 
 
-def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationResult:
+def run_investigation(
+    case: CaseView, registry: ToolRegistry, *, llm_client: LLMClient | None = None
+) -> InvestigationResult:
     unresolved = [c for c in case.checks if c.status != Status.PASS]
 
     notes_preview = _safe_notes_preview(case.event.notes)
@@ -144,6 +156,11 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
         else ""
     )
 
+    # Computed once, independent of everything below: see the hard-rules
+    # bullet above and injection_detector.py's module docstring for why
+    # this can never influence any branch that follows.
+    injection_signal = detect_injection_signal(case.event.notes, llm_client)
+
     if not unresolved:
         return InvestigationResult(
             shipment_id=case.shipment_id,
@@ -151,6 +168,7 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
             tool_call=None,
             reasoning="All mandatory checks already passed; no investigation needed." + notes_note,
             suggests_resolved=True,
+            injection_signal=injection_signal,
         )
 
     # Only ever investigate the first unresolved check — CALL_BUDGET = 1
@@ -169,6 +187,7 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
                 "but has no mapped investigation tool." + notes_note
             ),
             unresolved_questions=[target.detail],
+            injection_signal=injection_signal,
         )
 
     arguments = _build_tool_arguments(tool_name, case)
@@ -197,6 +216,7 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
                 "routing to operator review rather than guessing." + notes_note
             ),
             unresolved_questions=[target.detail],
+            injection_signal=injection_signal,
         )
 
     call_record = ToolCallRecord(
@@ -244,4 +264,5 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
         reasoning=reasoning,
         unresolved_questions=[] if resolved else [target.detail],
         suggests_resolved=resolved,
+        injection_signal=injection_signal,
     )
