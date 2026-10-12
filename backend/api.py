@@ -18,7 +18,7 @@ from functools import lru_cache
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from backend.models import ApprovalRequest, CaseView, ShipmentEvent
+from backend.models import ApprovalRequest, CaseView, RecheckRequest, ShipmentEvent
 from backend.storage import BackendError, Store
 
 app = FastAPI(title="zer0track backend", version="0.1.0")
@@ -82,6 +82,17 @@ def evaluate(shipment_id: str, event: ShipmentEvent,
     if shipment_id != event.shipment_id:
         raise HTTPException(status_code=400, detail="Path shipment ID differs from body")
     return store.evaluate_case(event, handler_id)
+
+
+@app.post("/cases/{shipment_id}/recheck", response_model=CaseView)
+def recheck(shipment_id: str, request: RecheckRequest,
+            _auth: None = Depends(service_auth), store: Store = Depends(get_store)):
+    """Authenticated internal re-evaluation of the latest trusted evidence.
+
+    The AI may request this via a controlled service. Its own findings cannot
+    set check results to PASS and may not supply arbitrary trusted data.
+    """
+    return store.recheck_case(shipment_id, request)
 
 
 @app.post("/cases/{shipment_id}/approve", response_model=CaseView)
