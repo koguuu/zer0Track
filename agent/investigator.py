@@ -22,12 +22,26 @@ Hard rules (enforced by code, verified by injection_tests.py):
     source of the actual decision; InvestigationResult is a recommendation
     attached for the human reviewer, nothing more.
 
-TODO (tracked against the backend, see team chat): the current
-backend.checkers treats "receiver not pre-listed as a delegate" as an
-outright FAIL rather than UNKNOWN, so there's no backend re-check endpoint
-yet for a resolved identity_authority to actually flip the stored decision.
-Until that lands, `suggests_resolved` on the output is informational only —
-it does NOT get written back anywhere automatically.
+STATUS (2026-10-12, after Bhone's backend fixes): backend.checkers now fails
+identity_authority CLOSED as UNKNOWN rather than FAIL when a receiver isn't
+pre-listed, and an authenticated POST /cases/{id}/recheck endpoint now exists
+(service_auth-gated, separate credential from courier/supervisor) that
+re-runs the real deterministic checks against the trusted store and bumps
+the case version. Two things remain open, not yet done anywhere in this
+codebase:
+  1. Nothing calls /recheck. This module stays a pure function on purpose
+     (see the hard rules above) and must not hold an HTTP client or a
+     service credential itself; a separate, auditable caller needs to invoke
+     /recheck when `suggests_resolved` is True, after a successful tool call.
+  2. Even if that caller existed, lookup_delegation/lookup_checkpoint (see
+     tools.py's NOTE ON SCOPE) only re-read the SAME static manifest row
+     check_identity_authority already read at evaluation time — there is no
+     endpoint to write a newly-registered delegate/checkpoint into the
+     trusted manifest after seed_trusted (which is fixture-only, not public).
+     So a recheck today will reproduce the same UNKNOWN; it cannot yet
+     resolve anything a human hasn't separately updated in the trusted store.
+`suggests_resolved` on this module's output therefore remains informational
+only — it does NOT get written back anywhere automatically.
 """
 from __future__ import annotations
 

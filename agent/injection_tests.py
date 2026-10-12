@@ -73,11 +73,14 @@ def _event(notes: str | None = None, photo_metadata_ref: str | None = None, rece
 
 
 def _fail_identity_check() -> CheckerResult:
-    # receiver_id "GUARD-99" is not in authorized_receiver_ids/delegate_ids,
-    # so this mirrors exactly what backend.checkers would return for it.
+    # receiver_id "GUARD-99" is not in authorized_receiver_ids/delegate_ids.
+    # backend.checkers.check_identity_authority now fails CLOSED as UNKNOWN
+    # here, not FAIL: an absent delegation record is not proof of an explicit
+    # denial (see the comment in checkers.py). This mirrors that exactly —
+    # keep this in sync if checkers.py's wording changes again.
     return CheckerResult(
-        checker_name="identity_authority", status=Status.FAIL,
-        detail="Receiver not listed in trusted authorization or delegation records",
+        checker_name="identity_authority", status=Status.UNKNOWN,
+        detail="Receiver authorization not found; verify registered receiver/delegation",
         evidence_ids=["evt1"],
     )
 
