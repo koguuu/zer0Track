@@ -15,6 +15,14 @@ from backend.models import (
 # Synthetic demonstration policies, NOT actual GDEX thresholds.
 MAX_LOCATION_AGE_SECONDS = 600
 MAX_LOCATION_ACCURACY_M = 100.0
+CLOCK_FUTURE_TOLERANCE_SECONDS = 60
+
+
+def _as_utc(when: datetime) -> datetime | None:
+    """Normalize an aware datetime; naive datetimes remain unverifiable."""
+    if when.tzinfo is None or when.utcoffset() is None:
+        return None
+    return when.astimezone(timezone.utc)
 
 
 def _result(name: str, status: Status, detail: str, refs: list[str]) -> CheckerResult:
@@ -69,7 +77,11 @@ def check_identity_authority(
             or shipment.handler_id != authenticated_handler_id):
         return _result(name, Status.FAIL, "Handler identity or current custody authorization mismatch", refs)
     if shipment.receiver_id not in set(trusted.authorized_receiver_ids + trusted.authorized_delegate_ids):
-        return _result(name, Status.FAIL, "Receiver not listed in trusted authorization or delegation records", refs)
+        # No directory/explicit denial evidence exists in this provisional schema.
+        # An absent delegation is NOT proof of an explicitly unauthorized identity.
+        # Fail closed as UNKNOWN; a verified denial needs a separate trusted signal.
+        return _result(name, Status.UNKNOWN,
+                       "Receiver authorization not found; verify registered receiver/delegation", refs)
     return _result(name, Status.PASS, "Authenticated handler and receiver are authorized", refs)
 
 
@@ -84,20 +96,33 @@ def _distance_m(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float
 def check_location_consistency(
     shipment: ShipmentEvent,
     trusted: TrustedShipmentRecord | None,
+    *, now: datetime | None = None,
 ) -> CheckerResult:
     name = "location"
     if trusted is None or shipment.location is None:
         return _result(name, Status.UNKNOWN, "Missing manifest or location evidence", [shipment.event_id])
     p = shipment.location
     refs = [shipment.event_id, f"location:{shipment.event_id}"]
-    if p.recorded_at.tzinfo is None or shipment.receipt_timestamp.tzinfo is None:
-        return _result(name, Status.UNKNOWN, "Location or receipt timestamp lacks timezone", refs)
+    checked_at = _as_utc(now or datetime.now(timezone.utc))
+    recorded_at = _as_utc(p.recorded_at)
+    receipt_at = _as_utc(shipment.receipt_timestamp)
+    event_at = _as_utc(shipment.event_timestamp)
+    if None in (checked_at, recorded_at, receipt_at, event_at):
+        return _result(name, Status.UNKNOWN, "Location, event, receipt or server time lacks timezone", refs)
+    # Crucial: submitted event/receipt/GPS times can ALL be backdated together.
+    # Check their absolute freshness against server time in addition to relative order.
+    # This must not depend solely on user-supplied timestamps.
+    for label, timestamp in (("location", recorded_at), ("handoff", event_at), ("receipt", receipt_at)):
+        absolute_age = (checked_at - timestamp).total_seconds()
+        if absolute_age < -CLOCK_FUTURE_TOLERANCE_SECONDS or absolute_age > MAX_LOCATION_AGE_SECONDS:
+            return _result(name, Status.UNKNOWN,
+                           f"{label.capitalize()} timestamp is too old or future-dated for a fresh handoff", refs)
     if p.mock_location_flag:
         return _result(name, Status.UNKNOWN, "Device reports mock location; independent verification required", refs)
     if p.source == "unknown":
         return _result(name, Status.UNKNOWN, "Unverified location source", refs)
-    age = (shipment.receipt_timestamp - p.recorded_at).total_seconds()
-    if age < -60 or age > MAX_LOCATION_AGE_SECONDS:
+    age = (receipt_at - recorded_at).total_seconds()
+    if age < -CLOCK_FUTURE_TOLERANCE_SECONDS or age > MAX_LOCATION_AGE_SECONDS:
         return _result(name, Status.UNKNOWN, "Location evidence is future-dated or stale", refs)
     if p.accuracy_m > MAX_LOCATION_ACCURACY_M:
         return _result(name, Status.UNKNOWN, "Location accuracy too weak to verify checkpoint", refs)
@@ -122,5 +147,5 @@ def run_mandatory_checks(
     return [
         check_parcel_code_integrity(event, trusted, code, now=now),
         check_identity_authority(event, trusted, authenticated_handler_id),
-        check_location_consistency(event, trusted),
+        check_location_consistency(event, trusted, now=now),
     ]
