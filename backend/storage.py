@@ -14,7 +14,7 @@ from backend.audit import append_audit, log_approval, setup_audit, verify_audit_
 from backend.checkers import run_mandatory_checks
 from backend.models import (
     AgentDecision, ApprovalRecord, ApprovalRequest, CaseView, CheckerResult,
-    ShipmentEvent, TransferCodeRecord, TrustedShipmentRecord,
+    RecheckRequest, ShipmentEvent, TransferCodeRecord, TrustedShipmentRecord,
 )
 from backend.policy import evaluate_policy
 
@@ -27,6 +27,13 @@ class BackendError(Exception):
 
 def _json(model) -> str:
     return model.model_dump_json()
+
+
+def _utc_iso(dt: datetime) -> str:
+    """Canonicalize timestamp serialization for new database writes."""
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValueError("Stored timestamps must include a timezone offset")
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _fingerprint(event: ShipmentEvent) -> str:
@@ -87,8 +94,8 @@ class Store:
                 (code_ref, shipment_id, transaction_id, receiver_id, issued_at, expires_at, consumed_at)
                 VALUES (?,?,?,?,?,?,?)""", (
                 code.code_ref, code.shipment_id, code.transaction_id, code.receiver_id,
-                code.issued_at.isoformat(), code.expires_at.isoformat(),
-                code.consumed_at.isoformat() if code.consumed_at else None))
+                _utc_iso(code.issued_at), _utc_iso(code.expires_at),
+                _utc_iso(code.consumed_at) if code.consumed_at else None))
             conn.commit()
 
     @staticmethod
@@ -161,6 +168,46 @@ class Store:
             conn.commit()
             return self.get_case(event.shipment_id)
 
+    def recheck_case(self, shipment_id: str, req: RecheckRequest) -> CaseView:
+        """Refresh mandatory checks using trusted records held by the backend.
+
+        Does not accept an LLM's `suggests_resolved` as authoritative. A trusted
+        authorization/checkpoint update must happen through an independent channel
+        before this call can actually change a check from UNKNOWN to PASS.
+        """
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM cases WHERE shipment_id=?", (shipment_id,)).fetchone()
+            if row is None:
+                raise BackendError(404, "Case not found")
+            case = self._from_row(row)
+            if case.state != "PENDING":
+                raise BackendError(409, "Only pending cases can be rechecked")
+            if req.expected_case_version != case.version:
+                raise BackendError(409, "Stale recheck request: evidence version changed")
+            handler = conn.execute("SELECT authenticated_handler_id FROM handler_evaluations WHERE shipment_id=?",
+                                   (shipment_id,)).fetchone()
+            trusted = self._trusted(conn, shipment_id)
+            code = self._code(conn, case.event.transfer_code_ref)
+            checks = run_mandatory_checks(case.event, trusted, code,
+                                          handler["authenticated_handler_id"] if handler else None)
+            decision = evaluate_policy(checks)
+            # A recheck always establishes a NEW evidence version, invalidating
+            # any approval relying on the old version, even if statuses are unchanged.
+            version = case.version + 1
+            conn.execute("""UPDATE cases SET version=?,checks=?,decision=?,approval=NULL
+                WHERE shipment_id=? AND state='PENDING'""", (
+                version, json.dumps([x.model_dump(mode="json") for x in checks]),
+                _json(decision), shipment_id))
+            append_audit(conn, shipment_id, "RECHECK",
+                         {"event_id": case.event.event_id, "case_version": version,
+                          "reason": req.reason,
+                          "check_results": [x.model_dump(mode="json") for x in checks],
+                          "policy_decision": decision.model_dump(mode="json")})
+            conn.commit()
+            return CaseView(shipment_id=shipment_id, version=version, state="PENDING",
+                            event=case.event, checks=checks, decision=decision)
+
     def approve_case(self, shipment_id: str, req: ApprovalRequest, operator_id: str) -> CaseView:
         approval_fp = hashlib.sha256(f"{shipment_id}:{operator_id}:{req.model_dump_json()}".encode()).hexdigest()
         with self.connect() as conn:
@@ -185,19 +232,27 @@ class Store:
             # handler authenticated at submission. See the stored handler identity below.
             original = conn.execute("SELECT authenticated_handler_id FROM handler_evaluations WHERE shipment_id=?", (shipment_id,)).fetchone()
             handler_id = original["authenticated_handler_id"] if original else None
-            checks = run_mandatory_checks(case.event, trusted, code, handler_id)
+            now = datetime.now(timezone.utc)
+            checks = run_mandatory_checks(case.event, trusted, code, handler_id, now=now)
             decision = evaluate_policy(checks)
+            # Changes to independently trusted evidence require a new case
+            # version before any approval can execute. Agent conclusions alone
+            # never refresh a case; use the authenticated /recheck endpoint.
+            if checks != case.checks or decision != case.decision:
+                raise BackendError(409, "Evidence or policy has changed; recheck case before approval")
             if req.action == "accept":
                 if decision.decision != "ACCEPT_READY":
                     raise BackendError(409, "Mandatory evidence is not all PASS; cannot accept")
-                now = datetime.now(timezone.utc)
-                # Atomic compare-and-swap prevents two simultaneous accepts.
+                # The mandatory checker already compared parsed aware datetimes
+                # against UTC time *inside* this BEGIN IMMEDIATE transaction.
+                # Do NOT compare mixed-offset ISO timestamps as SQLite TEXT:
+                # lexical order is not chronological order.
+                # The consumed_at IS NULL CAS still guarantees single-use.
                 cur = conn.execute("""UPDATE transfer_codes SET consumed_at=?
                     WHERE code_ref=? AND shipment_id=? AND transaction_id=? AND receiver_id=?
-                    AND consumed_at IS NULL AND issued_at <= ? AND expires_at > ?""", (
-                    now.isoformat(), case.event.transfer_code_ref, shipment_id,
-                    case.event.transaction_id, case.event.receiver_id,
-                    now.isoformat(), now.isoformat()))
+                    AND consumed_at IS NULL""", (
+                    _utc_iso(now), case.event.transfer_code_ref, shipment_id,
+                    case.event.transaction_id, case.event.receiver_id))
                 if cur.rowcount != 1:
                     raise BackendError(409, "Code consumed or invalid during acceptance")
                 assert trusted is not None
