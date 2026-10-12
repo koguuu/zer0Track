@@ -113,6 +113,16 @@ class AgentDecision(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+class RecheckRequest(StrictModel):
+    """Request a fresh deterministic check against server-side trusted records.
+
+    An investigator may request this operation; its suggestions are NOT evidence.
+    Caller cannot supply fabricated authorization, checkpoint, or code records.
+    """
+    expected_case_version: int = Field(ge=1)
+    reason: str = Field(default="New independently verified evidence available", min_length=3, max_length=1000)
+
+
 class ApprovalRequest(StrictModel):
     action: Literal["accept", "hold", "reject", "escalate"]
     expected_case_version: int = Field(ge=1)
