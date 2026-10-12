@@ -10,7 +10,7 @@ Security rules enforced here, not left to the caller:
      dynamic dispatch (no getattr(module, name), no eval). Adding a tool
      means adding it to ALLOWED_TOOLS explicitly, in code review.
 
-NOTE ON SCOPE: as of the current backend (see TODO in investigator.py),
+NOTE ON SCOPE: as of the current backend (see STATUS note in investigator.py),
 lookup_delegation / lookup_checkpoint can only re-read data already present
 in the trusted manifest written at seed time — there is no separate
 delegation-registration source yet. That is a real limitation, not simulated
@@ -18,9 +18,23 @@ here: if a delegate genuinely was never registered, the lookup correctly
 finds nothing. Once backend/storage.py exposes a live delegation/checkpoint
 registry, only the query body inside each tool needs to change — the
 allowlist contract (name, arguments, return shape) stays the same.
+
+TIMEOUT: every call is bounded by TOOL_CALL_TIMEOUT_SECONDS, enforced with a
+worker thread + future.result(timeout=...) rather than a bare function call,
+so "tool failure/timeout -> operator review" (investigator.py) is actually
+exercised, not just asserted. Caveat, stated plainly rather than hidden: CPython
+threads cannot be force-killed, so a genuinely hung call is abandoned, not
+stopped — the caller gets ToolTimeoutError promptly and routes to operator
+review, but the orphaned thread keeps running in the background until it
+finishes or the process exits. Given every query here goes through a
+connection opened with `busy_timeout=10000` (storage.py), a hang past the
+10s SQLite lock timeout would have to be a bug in the tool body itself, not
+lock contention — this timeout is defense in depth against that case, not
+a mechanism this demo's data can actually trigger.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import sqlite3
 from typing import Literal
@@ -32,6 +46,23 @@ from backend.storage import Store
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class ToolTimeoutError(RuntimeError):
+    """Raised when a tool call exceeds TOOL_CALL_TIMEOUT_SECONDS. Callers
+    (investigator.py) must treat this exactly like any other tool failure:
+    fall through to operator review, never retry silently.
+    """
+
+
+TOOL_CALL_TIMEOUT_SECONDS = 5.0
+
+# Module-level, reused across calls rather than a fresh executor per call —
+# a context-managed ThreadPoolExecutor's __exit__ blocks on shutdown(wait=True),
+# which would defeat the timeout by waiting for the hung call anyway.
+_TOOL_CALL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="zer0track-tool-call"
+)
 
 
 class LookupDelegationArgs(StrictModel):
@@ -148,8 +179,13 @@ class ToolRegistry:
         # Validates and coerces — raises pydantic.ValidationError on anything
         # malformed or unexpected, before the function body ever runs.
         args = args_model.model_validate(raw_arguments)
+        future = _TOOL_CALL_EXECUTOR.submit(fn, self._store, args)
         try:
-            return fn(self._store, args)
+            return future.result(timeout=TOOL_CALL_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError as exc:
+            raise ToolTimeoutError(
+                f"Tool '{tool_name}' exceeded {TOOL_CALL_TIMEOUT_SECONDS}s budget"
+            ) from exc
         except sqlite3.Error as exc:
             # Never leak raw SQL errors (could reveal schema) to the caller.
             raise RuntimeError("Lookup failed") from exc

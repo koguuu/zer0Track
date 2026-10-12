@@ -11,6 +11,7 @@ Run with: pytest agent/injection_tests.py -v
 from __future__ import annotations
 
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,9 +28,10 @@ from backend.models import (
 )
 from backend.storage import Store
 
+import agent.tools as tools
 from agent.investigator import run_investigation
 from agent.models import InvestigationResult
-from agent.tools import ToolRegistry
+from agent.tools import LookupDelegationArgs, ToolRegistry, ToolTimeoutError
 
 
 @pytest.fixture
@@ -274,3 +276,61 @@ def test_notes_derived_text_never_reaches_tool_arguments(store: Store):
     assert "482913" not in str(result.tool_call.arguments)
     assert "482913" not in " ".join(result.tool_call.evidence_ids)
     assert "9999" not in str(result.tool_call.arguments)
+
+
+def test_tool_timeout_routes_to_operator_review(store: Store):
+    """LLM10 (Unbounded Consumption), the actual hang case: a tool call that
+    never returns must not hang the investigation — ToolRegistry.call()
+    enforces TOOL_CALL_TIMEOUT_SECONDS via a worker thread, and a timeout
+    must fall through to operator review exactly like a validation error or
+    a sqlite3.Error, per the hard rules in investigator.py's docstring.
+    """
+    def _hang(_store, _args):
+        time.sleep(tools.TOOL_CALL_TIMEOUT_SECONDS + 25)
+
+    original = tools.ALLOWED_TOOLS["lookup_delegation"]
+    tools.ALLOWED_TOOLS["lookup_delegation"] = (LookupDelegationArgs, _hang)
+    try:
+        event = _event()
+        checks = [_fail_identity_check(), _pass_result("parcel_code_integrity"), _pass_result("location")]
+
+        from backend.models import AgentDecision, CaseView
+        case = CaseView(
+            shipment_id="GDX1", version=1, state="PENDING", event=event, checks=checks,
+            decision=AgentDecision(decision="REQUEST_VERIFICATION", recommended_action="verify",
+                                    requires_human_approval=False, reason="identity unresolved"),
+        )
+
+        started = time.monotonic()
+        result = run_investigation(case, ToolRegistry(store))
+        elapsed = time.monotonic() - started
+
+        assert elapsed < tools.TOOL_CALL_TIMEOUT_SECONDS + 2, (
+            "run_investigation must return promptly once the timeout fires, "
+            "not wait for the hung call to finish"
+        )
+        assert result.tool_call is None
+        assert result.suggests_resolved is False
+        assert "ToolTimeoutError" in result.reasoning
+    finally:
+        # Restore the allowlist so later tests in this process see the real
+        # lookup_delegation again, even if an assertion above fails.
+        tools.ALLOWED_TOOLS["lookup_delegation"] = original
+
+
+def test_tool_registry_direct_call_also_raises_tool_timeout_error(store: Store):
+    """Defense in depth, mirroring test_tool_registry_rejects_unknown_tool:
+    the timeout is enforced inside ToolRegistry.call() itself, not just as a
+    side effect of how investigator.py happens to use it.
+    """
+    def _hang(_store, _args):
+        time.sleep(tools.TOOL_CALL_TIMEOUT_SECONDS + 25)
+
+    original = tools.ALLOWED_TOOLS["lookup_delegation"]
+    tools.ALLOWED_TOOLS["lookup_delegation"] = (LookupDelegationArgs, _hang)
+    try:
+        registry = ToolRegistry(store)
+        with pytest.raises(ToolTimeoutError):
+            registry.call("lookup_delegation", {"shipment_id": "GDX1", "candidate_receiver_id": "R1"})
+    finally:
+        tools.ALLOWED_TOOLS["lookup_delegation"] = original
