@@ -149,6 +149,16 @@ def test_skip_location_check_instruction(store: Store):
     assert result.unresolved_check == "location", "The instruction to ignore it must not remove it from investigation"
     assert result.tool_call is not None
     assert result.tool_call.tool_name == "lookup_checkpoint"
+    # The seeded manifest genuinely has a matching checkpoint, so the tool
+    # itself finds something — but mock/spoofed GPS is a completely
+    # different failure reason than "no checkpoint registered", and
+    # lookup_checkpoint cannot speak to spoofing at all. suggests_resolved
+    # must stay False regardless of what the tool found (see
+    # investigator._RESOLVABLE_DETAILS — this is the exact "misleading
+    # resolution suggestion" scenario an external review flagged).
+    assert result.suggests_resolved is False, (
+        "a checkpoint existing must never be read as resolving a spoofed-GPS failure"
+    )
 
 
 def test_forged_caption_instruction(store: Store):
@@ -309,7 +319,13 @@ def test_tool_timeout_routes_to_operator_review(store: Store):
             "run_investigation must return promptly once the timeout fires, "
             "not wait for the hung call to finish"
         )
-        assert result.tool_call is None
+        # The attempt is recorded, not dropped (see ToolCallRecord.succeeded) —
+        # Raja's evaluation needs to see that a tool WAS tried and failed,
+        # not just that nothing happened.
+        assert result.tool_call is not None
+        assert result.tool_call.succeeded is False
+        assert result.tool_call.tool_name == "lookup_delegation"
+        assert "ToolTimeoutError" in result.tool_call.result_summary
         assert result.suggests_resolved is False
         assert "ToolTimeoutError" in result.reasoning
     finally:

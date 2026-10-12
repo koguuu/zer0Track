@@ -22,11 +22,21 @@ ToolName = Literal["lookup_delegation", "lookup_checkpoint", "lookup_custody_his
 
 
 class ToolCallRecord(StrictModel):
-    """One (and at most one) tool invocation for a given investigation."""
+    """One (and at most one) tool invocation for a given investigation.
+
+    Recorded whether the call succeeded OR failed/timed out — `succeeded`
+    distinguishes the two. A failed attempt still carries real information
+    (which tool was tried, with what arguments, and why it failed) that
+    Raja's evaluation needs to measure attempt/error rates, and that an
+    operator or later audit should be able to see — dropping it to `None`
+    on failure would make those attempts invisible everywhere downstream
+    (agent/audit_log.py included).
+    """
 
     tool_name: ToolName
     arguments: dict[str, str]
     called_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    succeeded: bool = True
     result_summary: str
     evidence_ids: list[str] = Field(default_factory=list)
 

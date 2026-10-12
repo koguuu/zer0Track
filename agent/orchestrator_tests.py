@@ -134,14 +134,22 @@ def test_unresolved_investigation_logs_but_does_not_recheck(store: Store):
 
 
 def test_resolved_investigation_attempts_recheck_and_reports_unavailable(store: Store):
-    # accuracy_m=500 makes location UNKNOWN for a weak-accuracy reason, but
-    # a checkpoint of the right handoff_type genuinely exists on the
-    # manifest -> lookup_checkpoint's found=True -> suggests_resolved=True.
+    # The unresolved detail must be the EXACT text check_location_consistency
+    # uses for "no checkpoint registered" (see investigator._RESOLVABLE_
+    # DETAILS) — that is the ONE location failure reason lookup_checkpoint
+    # can actually speak to. The seeded manifest genuinely has a 'doorstep'
+    # checkpoint, representing a human having registered one after the
+    # original (now-stale) UNKNOWN was recorded -> lookup_checkpoint's
+    # found=True -> suggests_resolved=True is a CORRECT claim here, unlike
+    # a weak-accuracy or spoofed-GPS UNKNOWN, which the fixed tool mapping
+    # cannot address at all (see agent/injection_tests.py and
+    # investigator.py's _RESOLVABLE_DETAILS gate).
     # No ZTRACK_API_BASE_URL/SERVICE_KEY configured (see fixture above), so
     # the recheck attempt must fail cleanly, not hang or raise.
-    case = _case(_event(receiver_id="R1", accuracy_m=500), [
+    case = _case(_event(receiver_id="R1", accuracy_m=10), [
         _pass("identity_authority"), _pass("parcel_code_integrity"),
-        CheckerResult(checker_name="location", status=Status.UNKNOWN, detail="too weak", evidence_ids=["evt1"]),
+        CheckerResult(checker_name="location", status=Status.UNKNOWN,
+                      detail="No trusted approved checkpoint for this handoff type", evidence_ids=["evt1"]),
     ])
     outcome = investigate_and_maybe_recheck(case, store)
 
@@ -150,6 +158,58 @@ def test_resolved_investigation_attempts_recheck_and_reports_unavailable(store: 
     assert outcome.recheck_requested is True
     assert outcome.recheck_response is None
     assert outcome.recheck_error is not None and "not configured" in outcome.recheck_error
+
+
+def test_location_unresolved_for_unrelated_reason_is_never_falsely_resolved(store: Store):
+    """The bug an external review caught: lookup_checkpoint's found=True
+    (a checkpoint of the right handoff type exists) must NOT be read as
+    resolving a location check that was actually unresolved for a
+    completely different reason — spoofed/mock GPS here. Before the
+    _RESOLVABLE_DETAILS gate in investigator.py, this would have
+    incorrectly reported suggests_resolved=True and attempted a recheck,
+    even though nothing about the spoofing was addressed.
+    """
+    case = _case(_event(receiver_id="R1", accuracy_m=10), [
+        _pass("identity_authority"), _pass("parcel_code_integrity"),
+        CheckerResult(checker_name="location", status=Status.UNKNOWN,
+                      detail="Device reports mock location; independent verification required",
+                      evidence_ids=["evt1"]),
+    ])
+    outcome = investigate_and_maybe_recheck(case, store)
+
+    assert outcome.investigation.tool_call is not None
+    assert outcome.investigation.tool_call.succeeded is True  # the tool call itself succeeded...
+    assert outcome.investigation.suggests_resolved is False  # ...but must not be read as resolving this
+    assert outcome.recheck_requested is False  # and must never trigger a recheck on that false basis
+
+
+def test_parcel_code_integrity_never_resolved_by_mere_audit_history(store: Store):
+    """The second half of the same bug: lookup_custody_history's found is
+    true as soon as ANY audit history exists for the shipment, which is
+    true almost immediately after the first submission. It must never be
+    read as resolving a parcel_code_integrity failure (replay, expiry,
+    mismatch) — see its own docstring and investigator._RESOLVABLE_DETAILS,
+    which maps it to an empty set on purpose.
+    """
+    from backend.audit import append_audit
+    with store.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        append_audit(conn, "GDX1", "EVALUATION", {"dummy": "prior submission"})
+        conn.commit()
+
+    case = _case(_event(receiver_id="R1", accuracy_m=10), [
+        _pass("identity_authority"),
+        CheckerResult(checker_name="parcel_code_integrity", status=Status.FAIL,
+                      detail="Transfer code already consumed (replay)", evidence_ids=["evt1"]),
+        _pass("location"),
+    ])
+    outcome = investigate_and_maybe_recheck(case, store)
+
+    assert outcome.investigation.tool_call is not None
+    assert outcome.investigation.tool_call.tool_name == "lookup_custody_history"
+    assert "prior audit entries" in outcome.investigation.tool_call.result_summary  # it DID find history
+    assert outcome.investigation.suggests_resolved is False  # ...but that must never mean "resolved"
+    assert outcome.recheck_requested is False
 
 
 def test_recheck_reason_never_contains_raw_notes(store: Store):

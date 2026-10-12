@@ -16,7 +16,18 @@ Hard rules (enforced by code, verified by injection_tests.py):
   - At most one tool call per investigation (CALL_BUDGET = 1). A tool
     failure, a validation error on its arguments, or exceeding the budget
     all fall through to the same place: hand the case to the operator with
-    no resolution claimed.
+    no resolution claimed — but the ATTEMPT itself is still recorded (see
+    ToolCallRecord.succeeded) rather than silently dropped, so Raja's
+    evaluation and any later audit can see what was tried and why it failed.
+  - `suggests_resolved` is true ONLY when the tool both found something AND
+    that tool is capable of addressing the SPECIFIC reason the check is
+    unresolved (see _RESOLVABLE_DETAILS below). A checker can fail/go
+    UNKNOWN for several different reasons under one checker_name, and the
+    fixed tool mapping only ever investigates one of them — finding
+    something unrelated (a checkpoint that exists for a different handoff
+    type reason than why location actually failed; a receiver who'd be a
+    valid delegate when the real failure was a HANDLER/custody mismatch)
+    must never be reported as resolving a problem it never touched.
   - This module cannot change a CheckerResult, decide policy, approve, or
     execute anything. backend.policy.evaluate_policy() remains the sole
     source of the actual decision; InvestigationResult is a recommendation
@@ -65,6 +76,36 @@ _CHECK_TO_TOOL: dict[str, ToolName] = {
     "parcel_code_integrity": "lookup_custody_history",
     "identity_authority": "lookup_delegation",
     "location": "lookup_checkpoint",
+}
+
+# A checker can fail/go UNKNOWN for several structurally different reasons
+# under the SAME checker_name (see backend/checkers.py), but the mapped
+# tool above only ever investigates ONE of those reasons. A tool's
+# `found=True` must never be read as "this specific failure is resolved"
+# unless the original unresolved detail is one this tool actually
+# addresses — otherwise finding *something* unrelated (a checkpoint that
+# exists for a different reason than why location failed; a receiver that
+# would be irrelevant to a handler/custody mismatch) gets reported as
+# resolving a problem it never touched. This dict is the explicit
+# allowlist of (tool, detail) pairs where `found=True` is a meaningful
+# resolution signal. It is intentionally coupled to checkers.py's exact
+# wording, the same way injection_tests.py's fixtures are — keep both in
+# sync if that wording changes.
+_RESOLVABLE_DETAILS: dict[ToolName, frozenset[str]] = {
+    "lookup_delegation": frozenset({
+        "Receiver authorization not found; verify registered receiver/delegation",
+    }),
+    "lookup_checkpoint": frozenset({
+        "No trusted approved checkpoint for this handoff type",
+    }),
+    # lookup_custody_history can NEVER resolve parcel_code_integrity — its
+    # own docstring says so ("never to override a current check result").
+    # It still runs (useful context: prior flags, repeat submissions) but
+    # its `found` is never treated as a resolution signal for any detail —
+    # a shipment having *some* audit history is true almost immediately
+    # after the first submission and says nothing about whether a code was
+    # replayed, expired, or mismatched.
+    "lookup_custody_history": frozenset(),
 }
 
 NOTES_PREVIEW_MAX_CHARS = 200
@@ -135,10 +176,21 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
     try:
         result = registry.call(tool_name, arguments)
     except Exception as exc:  # noqa: BLE001 - tool failure/timeout -> operator review, never silent
+        # Record the ATTEMPT even though it failed — a failure that drops
+        # to tool_call=None is indistinguishable from "no tool call was
+        # ever made" (the no-mapped-tool branch above), which hides exactly
+        # the attempt/error information Raja's evaluation needs to measure.
+        failed_record = ToolCallRecord(
+            tool_name=tool_name,
+            arguments={k: str(v) for k, v in arguments.items()},
+            succeeded=False,
+            result_summary=f"{exc.__class__.__name__}: {str(exc)[:200]}",
+            evidence_ids=[],
+        )
         return InvestigationResult(
             shipment_id=case.shipment_id,
             unresolved_check=target.checker_name,
-            tool_call=None,
+            tool_call=failed_record,
             reasoning=(
                 f"'{target.checker_name}' is unresolved ({target.status.value}: {target.detail}). "
                 f"Investigation tool '{tool_name}' failed ({exc.__class__.__name__}); "
@@ -154,16 +206,34 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
         evidence_ids=list(result.get("evidence_ids", [])),
     )
 
-    found = bool(result.get("found"))
+    tool_found = bool(result.get("found"))
+    # Gate on whether this tool can even SPEAK to the specific reason the
+    # check is unresolved (see _RESOLVABLE_DETAILS above) — not just on
+    # whether it found *something*. A checkpoint existing for the right
+    # handoff type says nothing about a location check that actually failed
+    # for spoofed/mock GPS, a stale timestamp, or a distance mismatch; a
+    # receiver being a valid delegate says nothing about an identity check
+    # that actually failed because the HANDLER didn't match custody.
+    addresses_this_detail = target.detail in _RESOLVABLE_DETAILS.get(tool_name, frozenset())
+    resolved = tool_found and addresses_this_detail
+
+    if not tool_found:
+        outcome_note = " This does not resolve it; routing to the operator."
+    elif addresses_this_detail:
+        outcome_note = (
+            " This supports resolving the check, but only the backend's own re-evaluation "
+            "can change the recorded decision; routing to the operator either way."
+        )
+    else:
+        outcome_note = (
+            " The tool found something, but not about the specific reason this check is "
+            f"unresolved ({target.detail!r}); NOT treated as resolving it. Routing to the operator."
+        )
+
     reasoning = (
         f"'{target.checker_name}' was unresolved ({target.status.value}: {target.detail}). "
         f"Ran '{tool_name}' — {result.get('detail', 'no detail returned')}."
-        + (
-            " This supports resolving the check, but only the backend's own re-evaluation "
-            "can change the recorded decision; routing to the operator either way."
-            if found
-            else " This does not resolve it; routing to the operator."
-        )
+        + outcome_note
         + notes_note
     )
 
@@ -172,6 +242,6 @@ def run_investigation(case: CaseView, registry: ToolRegistry) -> InvestigationRe
         unresolved_check=target.checker_name,
         tool_call=call_record,
         reasoning=reasoning,
-        unresolved_questions=[] if found else [target.detail],
-        suggests_resolved=found,
+        unresolved_questions=[] if resolved else [target.detail],
+        suggests_resolved=resolved,
     )
