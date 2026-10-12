@@ -21,7 +21,9 @@ these dishonesties:
     docstring for the isolation guarantee); llm_used is True only when that
     classifier actually ran and returned a signal for this row, which
     requires both an LLM_client configured (ZTRACK_LLM_API_KEY /
-    ANTHROPIC_API_KEY set) and event.notes present. With no key configured
+    ANTHROPIC_API_KEY for Anthropic, or GROQ_API_KEY for the free-tier
+    Groq alternative -- see agent/llm_client.py) and event.notes present.
+    With no key configured
     -- the default in this sandbox and in CI -- it stays False, same as
     before, and every existing test keeps passing unchanged.
   - agent_invoked is True only when run_investigation actually ran (i.e.
@@ -93,18 +95,24 @@ def evaluate_with_kogu(*, fixture, mode, policy_config, evaluation_only):
     from backend.storage import Store
 
     from agent.investigator import run_investigation
-    from agent.llm_client import AnthropicInjectionClassifier
+    from agent.llm_client import AnthropicInjectionClassifier, GroqInjectionClassifier
     from agent.tools import ToolRegistry
 
     # Optional and advisory-only (see agent/injection_detector.py) -- None
     # whenever no key is configured, which is the default here. Never
     # affects checks/action/tool selection; only whether injection_signal
     # gets populated below and, honestly, whether llm_used is True.
-    llm_client = (
-        AnthropicInjectionClassifier()
-        if (os.environ.get("ZTRACK_LLM_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
-        else None
-    )
+    # ZTRACK_LLM_API_KEY alone is ambiguous between providers, so it's
+    # treated as an Anthropic key (the original/primary path); GROQ_API_KEY
+    # is unambiguous and selects the free-tier Groq path. Set GROQ_API_KEY
+    # specifically if you don't have paid Anthropic credits -- confirmed
+    # working live 2026-10-13, see GroqInjectionClassifier's docstring.
+    if os.environ.get("ZTRACK_LLM_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
+        llm_client = AnthropicInjectionClassifier()
+    elif os.environ.get("GROQ_API_KEY"):
+        llm_client = GroqInjectionClassifier()
+    else:
+        llm_client = None
 
     event = ShipmentEvent.model_validate(fixture["shipment_event"])
     CourierHistory.model_validate(fixture["courier_history"])  # validated, not consumed by any mandatory check

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Protocol
 
 LLM_CLASSIFY_TIMEOUT_SECONDS = 8.0
@@ -102,4 +103,75 @@ class AnthropicInjectionClassifier:
             raise LLMUnavailable(f"LLM response did not match expected shape: {raw_text[:200]!r}")
         if parsed.get("category") not in _CATEGORIES:
             raise LLMUnavailable(f"LLM returned an unrecognized category: {parsed.get('category')!r}")
+        return parsed
+
+
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+class GroqInjectionClassifier:
+    """Real implementation, backed by Groq's free-tier, OpenAI-compatible
+    API (https://api.groq.com/openai/v1/chat/completions). A free,
+    zero-cost alternative to AnthropicInjectionClassifier for teams without
+    paid API credits -- same Protocol, same system prompt, swap-in
+    replacement via dependency injection, nothing else in the codebase
+    needs to change to use this instead.
+
+    Confirmed working live on 2026-10-13 against a real Groq account with
+    model="openai/gpt-oss-20b" -- all 4 of this project's real injection
+    test cases (clean note, fake approval claim, skip-check instruction,
+    forged system text) classified correctly. NOTE: gpt-oss models emit
+    reasoning tokens before their final answer, so max_tokens must stay
+    generous (500, not ~100) or the JSON gets truncated mid-response --
+    this bit us during verification, hence the regex-based extraction
+    below instead of a strict json.loads on the raw content.
+
+    Requires ZTRACK_LLM_API_KEY (falls back to GROQ_API_KEY). Which
+    specific models are available depends on the account -- call
+    GET https://api.groq.com/openai/v1/models with your key to see your
+    own account's list if "openai/gpt-oss-20b" ever stops being available.
+    """
+
+    def __init__(self, *, model: str = "openai/gpt-oss-20b", api_key: str | None = None):
+        self._model = model
+        self._api_key = api_key or os.environ.get("ZTRACK_LLM_API_KEY") or os.environ.get("GROQ_API_KEY")
+
+    def classify_injection(self, *, notes: str, timeout_seconds: float) -> dict:
+        if not self._api_key:
+            raise LLMUnavailable("No LLM API key configured (ZTRACK_LLM_API_KEY / GROQ_API_KEY)")
+        try:
+            import requests
+        except ImportError as exc:
+            raise LLMUnavailable("The 'requests' package is not installed") from exc
+
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": self._model,
+                    "max_tokens": 500,
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": notes},
+                    ],
+                },
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            raw_text = response.json()["choices"][0]["message"]["content"]
+            match = _JSON_OBJECT_RE.search(raw_text)
+            if not match:
+                raise LLMUnavailable(f"No JSON object found in Groq response: {raw_text[:200]!r}")
+            parsed = json.loads(match.group(0))
+        except LLMUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 - any API/network/parse failure -> fail-open, not a crash
+            raise LLMUnavailable(f"Groq classification failed: {exc.__class__.__name__}: {exc}") from exc
+
+        if not isinstance(parsed, dict) or "flagged" not in parsed:
+            raise LLMUnavailable(f"Groq response did not match expected shape: {raw_text[:200]!r}")
+        if parsed.get("category") not in _CATEGORIES:
+            raise LLMUnavailable(f"Groq returned an unrecognized category: {parsed.get('category')!r}")
         return parsed
