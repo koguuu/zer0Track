@@ -1,22 +1,22 @@
 # Raja observed evaluation results
 
-Synthetic evaluation. Pending pipeline rows: 60; adapter errors: 0.
+Synthetic evaluation. Pending pipeline rows: 0; adapter errors: 0.
 
-No LLM usage was reported. This run does not establish an LLM benefit.
+The connected service reports LLM use for 3 rows; confirm against actual provider calls.
 
 20 unique synthetic cases reused across 9 configurations; configuration rows are not independent samples.
 
 | Profile | Mode | Evaluated | Detection % | False alerts % | Unsupported accepts | Unresolved | Tools | Mean ms |
 |---|---|---|---|---|---|---|---|---|
-| strict | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.1344 |
-| strict | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 6.0239 |
-| strict | rules_and_llm | 0 | N/A | N/A | 0 | 0 | 0 | N/A |
-| balanced | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.1092 |
-| balanced | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.3204 |
-| balanced | rules_and_llm | 0 | N/A | N/A | 0 | 0 | 0 | N/A |
-| loose | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.1093 |
-| loose | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.3211 |
-| loose | rules_and_llm | 0 | N/A | N/A | 0 | 0 | 0 | N/A |
+| strict | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.0821 |
+| strict | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 9.2588 |
+| strict | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 9 | 10.3542 |
+| balanced | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.0912 |
+| balanced | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.2363 |
+| balanced | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 15 | 12.9865 |
+| loose | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.1364 |
+| loose | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.2477 |
+| loose | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 15 | 231.9494 |
 
 Detection means flagged for verification/review, not proven fraud. Denominators exclude pending cases and adapter failures.
 Proof-quality false alerts and legitimate physical-handoff review burden have different denominators.
@@ -30,13 +30,13 @@ Investigation profiles are inactive for that rules-only bridge; repeated profile
 
 - strict / scan_only: C04, C06, C07, C08, C09, C10, C11, C12, C15, C16, C18, C19, C20. Pending: 0; errors: 0.
 - strict / rules_only: C20. Pending: 0; errors: 0.
-- strict / rules_and_llm: not measured. Pending: 20; errors: 0.
+- strict / rules_and_llm: C20. Pending: 0; errors: 0.
 - balanced / scan_only: C04, C06, C07, C08, C09, C10, C11, C12, C15, C16, C18, C19, C20. Pending: 0; errors: 0.
 - balanced / rules_only: C20. Pending: 0; errors: 0.
-- balanced / rules_and_llm: not measured. Pending: 20; errors: 0.
+- balanced / rules_and_llm: C20. Pending: 0; errors: 0.
 - loose / scan_only: C04, C06, C07, C08, C09, C10, C11, C12, C15, C16, C18, C19, C20. Pending: 0; errors: 0.
 - loose / rules_only: C20. Pending: 0; errors: 0.
-- loose / rules_and_llm: not measured. Pending: 20; errors: 0.
+- loose / rules_and_llm: C20. Pending: 0; errors: 0.
 
 C20 has invalid hidden truth with consistent observable records; a real pipeline may also miss it.
 C12/C19 model legitimate physical handoffs with insufficient proof. Keeping them pending does not prove fraud.
