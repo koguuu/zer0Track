@@ -1,5 +1,16 @@
 # Raja validation with Bhone's uploaded backend
 
+> **Status update (2026-10-14):** This document predates Kogu's agent/LLM
+> integration and is now stale on several points: "Rules+LLM rows awaiting
+> Kogu", "no measured LLM advantage... yet", and "Actual LLM calls | 0" in
+> the table below no longer reflect the current state. The real pipeline is
+> connected (`evaluation/kogu_adapter.py:pipeline`), the full `rules_and_llm`
+> arm evaluates all 20 cases with zero pending rows, and a live run with a
+> configured Groq key has recorded real LLM classifier calls
+> (`llm_cases_service_reported` non-zero). See `evaluation/results/` for the
+> current numbers; this file is kept as a historical record of the earlier
+> integration pass.
+
 Tested on 11 October 2026 with Python 3.12.14 and Pydantic 2.13.5. Windows commands are supplied for Raja's Python 3.11 setup; no native Windows run was performed. The six uploaded backend files were tested unchanged. FastAPI route handling was not exercised; models, checkers, policy and SQLite Store were exercised directly.
 
 Command: `python -m unittest evaluation.test_raja evaluation.test_backend -v`

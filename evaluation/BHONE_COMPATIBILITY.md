@@ -1,5 +1,18 @@
 # Bhone backend compatibility and follow-up
 
+> **Status update (2026-10-14):** Issues 1 and 2 below are **fixed** in the
+> current `backend/checkers.py`/`backend/storage.py` on `main`.
+> `check_location_consistency()` now checks absolute freshness against real
+> server time (`checked_at`), not just the submitted receipt timestamp, so
+> backdated-but-internally-consistent evidence no longer passes. Code
+> validity in `check_parcel_code_integrity()` now compares parsed, timezone-aware
+> `datetime` objects rather than raw ISO strings, and `storage.py`'s SQL only
+> performs an atomic `consumed_at IS NULL` compare-and-swap — no string
+> timestamp comparison remains. The "Receiver authentication boundary" and
+> "Remaining integration decisions" sections below are still accurate as
+> documented limitations (see `docs/THREAT_MODEL.md`), not bugs. The rest of
+> this document is kept as a historical record of what was found and fixed.
+
 Reviewed all six files in the uploaded backend.zip unchanged. Raja's payloads now validate against the actual Pydantic classes. A read-only bridge calls the supplied mandatory checks and policy. The combined 40 tests passed. schema.md and Kogu's investigator/tools remain pending.
 
 ## Reproduced issue 1: submitted timestamps can make old location look fresh
