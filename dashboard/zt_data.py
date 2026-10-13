@@ -10,6 +10,7 @@ USE_MOCK = os.getenv("ZT_MOCK", "1") == "1"
 SERVICE_KEY = os.getenv("ZT_SERVICE_KEY", "")
 OPERATOR_ID = os.getenv("ZT_OPERATOR_ID", "")
 SUPERVISOR_TOKEN = os.getenv("ZT_SUPERVISOR_TOKEN", "")
+MANDATORY_CHECKERS = {"parcel_code_integrity", "identity_authority", "location"}
 
 
 def _service_headers():
@@ -126,7 +127,69 @@ def get_case(shipment_id):
     return response.json()
 
 
+def can_accept(case):
+    """Mirror the backend's accept guard before offering or recording acceptance."""
+    checks = case.get("checks", [])
+    return (
+        case.get("state", "").upper() == "PENDING"
+        and case.get("decision", {}).get("decision") == "ACCEPT_READY"
+        and len(checks) == 3
+        and {check.get("checker_name") for check in checks} == MANDATORY_CHECKERS
+        and all(check.get("status") == "PASS" for check in checks)
+    )
+
+
+def get_audit_trail(shipment_id):
+    """Read audit entries and chain status for a case."""
+    if USE_MOCK:
+        return {"chain_valid": True, "events": st.session_state.get("audit_events", {}).get(shipment_id, [])}
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/audit",
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def investigate_case(shipment_id):
+    """Run one advisory investigation pass and return its result."""
+    if USE_MOCK:
+        case = next(c for c in _mock_store() if c["shipment_id"] == shipment_id)
+        unresolved = list(case.get("decision", {}).get("unresolved_checks", []))
+        investigation = {
+            "shipment_id": shipment_id,
+            "unresolved_check": unresolved[0] if unresolved else None,
+            "tool_call": None,
+            "reasoning": "Mock investigation: review the unresolved checks and supporting evidence.",
+            "unresolved_questions": unresolved,
+            "suggests_resolved": False,
+            "injection_signal": None,
+        }
+        audit_events = st.session_state.setdefault("audit_events", {})
+        events = audit_events.setdefault(shipment_id, [])
+        events.append({"seq": len(events) + 1, "shipment_id": shipment_id,
+                       "kind": "AGENT_INVESTIGATION",
+                       "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                       "payload": investigation})
+        return {"shipment_id": shipment_id, "case_version": case["version"],
+                "audit_logged": True, "recheck_requested": False,
+                "recheck_error": None, "recheck_case_version": None,
+                "investigation": investigation}
+    response = requests.post(
+        f"{API_BASE}/cases/{shipment_id}/investigate",
+        headers=_service_headers(),
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def save_approval(case, action, reason, operator):
+    if case.get("state", "").upper() != "PENDING":
+        raise ValueError("Only pending cases can receive an approval decision.")
+    if action == "accept" and not can_accept(case):
+        raise ValueError("Accept is allowed only when all three mandatory checks pass and the backend decision is ACCEPT_READY.")
     record = {
         "action": action,
         "expected_case_version": case["version"],
@@ -134,6 +197,8 @@ def save_approval(case, action, reason, operator):
         "approval_request_id": f"dashboard-{case['shipment_id']}-{dt.datetime.now().timestamp()}",
     }
     if USE_MOCK:
+        if not reason.strip():
+            raise ValueError("A reason is required.")
         approval = {
             "approval_id": record["approval_request_id"],
             "shipment_id": case["shipment_id"],

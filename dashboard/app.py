@@ -59,7 +59,15 @@ with st.container(border=True):
 
 counts = {status: sum(c["status"] == status for c in cases) for status in
           ["pending", "flagged", "escalated", "accepted", "rejected"]}
-needs_attention = counts["flagged"] + counts["escalated"]
+pending_unresolved = sum(
+    case["status"] == "pending"
+    and (
+        bool(case.get("decision", {}).get("unresolved_checks"))
+        or any(check.get("status") in {"UNKNOWN", "FAIL"} for check in case.get("checks", []))
+    )
+    for case in cases
+)
+needs_attention = counts["flagged"] + counts["escalated"] + pending_unresolved
 metric_cols = st.columns(4)
 metric_cols[0].metric("Cases in queue", len(cases), icon=":material/inventory_2:", border=True)
 metric_cols[1].metric("Pending review", counts["pending"], icon=":material/pending:", border=True)
@@ -80,7 +88,19 @@ with right:
     sid = st.session_state.get("selected")
     if sid:
         case = data.get_case(sid)
-        render_timeline(case)
+        if st.button("Run agent investigation", icon=":material/psychology:", key=f"investigate_{sid}"):
+            try:
+                result = data.investigate_case(sid)
+                st.session_state[f"investigation_result_{sid}"] = result.get("investigation", result)
+            except Exception as error:
+                st.error(f"Investigation failed: {error}")
+        try:
+            audit = data.get_audit_trail(sid)
+            audit_error = None
+        except Exception as error:
+            audit = None
+            audit_error = error
+        render_timeline(case, audit, audit_error, st.session_state.get(f"investigation_result_{sid}"))
         render_approval_form(case, operator)
     else:
         with st.container(border=True):

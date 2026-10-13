@@ -8,13 +8,15 @@ def render_approval_form(case, operator):
     if case["state"].upper() != "PENDING":
         st.info("This case is no longer pending, so the backend will not accept another approval.")
         return
-    failed = any(c["status"] == "FAIL" for c in case["checks"])
-    options = ["hold", "reject"] if failed else ["accept", "hold", "reject", "escalate"]
-    if failed:
-        st.caption("A mandatory check failed, so this case cannot be approved.")
+    can_accept = data.can_accept(case)
+    options = ["hold", "reject", "escalate"]
+    if can_accept:
+        options.insert(0, "accept")
+    else:
+        st.caption("Accept is available only when all three checks pass and the agent decision is ACCEPT_READY.")
 
     with st.form(f"approval_{case['shipment_id']}", clear_on_submit=True):
-        decision = st.segmented_control("Decision", options, format_func=str.title, default=options[0])
+        decision = st.segmented_control("Decision", options, format_func=str.title, default="hold")
         comment = st.text_area("Reason (required)")
         if st.form_submit_button("Record decision", type="primary", icon=":material/check:"):
             if not comment.strip():

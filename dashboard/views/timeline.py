@@ -4,7 +4,31 @@ import streamlit as st
 BADGE_COLORS = {"PASS": "green", "FAIL": "red", "UNKNOWN": "orange"}
 
 
-def render_timeline(case):
+def _escape_audit_text(value):
+    if isinstance(value, str):
+        return html.escape(value)
+    if isinstance(value, dict):
+        return {key: _escape_audit_text(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_escape_audit_text(child) for child in value]
+    return value
+
+
+def _find_payload_fields(value, keys):
+    found = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).casefold().replace("-", "_")
+            if normalized in keys:
+                found.append((key, child))
+            found.extend(_find_payload_fields(child, keys))
+    elif isinstance(value, list):
+        for child in value:
+            found.extend(_find_payload_fields(child, keys))
+    return found
+
+
+def render_timeline(case, audit=None, audit_error=None, investigation_result=None):
     """Render model-shaped case data. All untrusted text is escaped."""
     event = case["event"]
     location = event.get("handoff_type", "handoff").replace("_", " ").title()
@@ -50,3 +74,68 @@ def render_timeline(case):
             st.caption(f"{html.escape(approval['timestamp'])} · Evidence v{approval['evidence_version']}")
             st.markdown(f"**{html.escape(approval['action'].title())}** by {html.escape(approval['operator_id'])}")
             st.write(html.escape(approval["reason"]))
+
+    st.markdown("##### :material/history: Agent and audit trail")
+    if investigation_result:
+        st.markdown("**Latest investigation response**")
+        st.json(_escape_audit_text(investigation_result), expanded=False)
+    if audit_error:
+        st.error(f"Could not load audit trail: {html.escape(str(audit_error))}")
+        return
+    if audit is None:
+        st.info("Audit trail is unavailable.")
+        return
+
+    chain_valid = audit.get("chain_valid")
+    if chain_valid is True:
+        st.badge("Audit chain valid", icon=":material/verified:", color="green")
+    elif chain_valid is False:
+        st.badge("Audit chain invalid", icon=":material/gpp_bad:", color="red")
+    else:
+        st.badge("Audit chain status unavailable", color="gray")
+
+    investigation_events = [
+        event for event in audit.get("events", [])
+        if str(event.get("kind", "")).upper() == "AGENT_INVESTIGATION"
+    ]
+    if not investigation_events:
+        st.info("Not yet investigated")
+        return
+
+    tool_keys = {"tool_call", "tool_results", "tool_calls", "tools", "checker_results"}
+    injection_keys = {"injection_signals", "prompt_injection_signals", "injection_findings", "injection_signal"}
+    for event in investigation_events:
+        payload = event.get("payload", {})
+        safe_payload = _escape_audit_text(payload)
+        with st.container(border=True):
+            st.markdown("**Agent investigation**")
+            st.caption(html.escape(str(event.get("recorded_at", "Timestamp unavailable"))))
+            if payload.get("reasoning"):
+                st.write(html.escape(str(payload["reasoning"])))
+            if payload.get("unresolved_check"):
+                st.caption(f"Unresolved check · {html.escape(str(payload['unresolved_check']))}")
+            questions = payload.get("unresolved_questions", [])
+            if questions:
+                st.markdown("Open questions")
+                for question in questions:
+                    st.markdown(f"- {html.escape(str(question))}")
+            if isinstance(payload.get("suggests_resolved"), bool):
+                st.caption("Agent suggests resolved: " + ("Yes" if payload["suggests_resolved"] else "No"))
+            tool_sections = _find_payload_fields(safe_payload, tool_keys)
+            injection_sections = _find_payload_fields(safe_payload, injection_keys)
+            if tool_sections:
+                st.markdown("Agent tool results")
+                for label, result in tool_sections:
+                    st.caption(html.escape(str(label)))
+                    st.json(result, expanded=False)
+            if injection_sections:
+                st.markdown("Injection signals")
+                for label, signals in injection_sections:
+                    st.caption(html.escape(str(label)))
+                    st.json(signals, expanded=False)
+            if not tool_sections:
+                st.caption("No structured tool-results field was found in this event.")
+            if not injection_sections:
+                st.caption("No structured injection-signals field was found in this event.")
+            with st.expander("Full investigation payload"):
+                st.json(safe_payload, expanded=True)
