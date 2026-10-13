@@ -123,6 +123,26 @@ class Store:
                 raise BackendError(404, "Shipment case not found")
             return self._from_row(row)
 
+    def list_cases(self, *, state: str | None = None, limit: int = 100) -> list[CaseView]:
+        """Read-only listing for dashboards/operators. Newest first (by rowid,
+        since cases are upserted in place and don't carry a created_at column).
+        `state` filters to an exact CaseView.state value (e.g. "PENDING");
+        omit it to list all states. `limit` is capped at 500 to keep a
+        dashboard call cheap -- callers needing more should page by state.
+        """
+        limit = max(1, min(limit, 500))
+        with self.connect() as conn:
+            if state is not None:
+                rows = conn.execute(
+                    "SELECT * FROM cases WHERE state=? ORDER BY rowid DESC LIMIT ?",
+                    (state, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM cases ORDER BY rowid DESC LIMIT ?", (limit,)
+                ).fetchall()
+            return [self._from_row(row) for row in rows]
+
     def evaluate_case(self, event: ShipmentEvent, authenticated_handler_id: str) -> CaseView:
         fp = _fingerprint(event)
         with self.connect() as conn:

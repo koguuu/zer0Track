@@ -101,6 +101,15 @@ def approve(shipment_id: str, request: ApprovalRequest,
     return store.approve_case(shipment_id, request, operator_id)
 
 
+@app.get("/cases", response_model=list[CaseView])
+def list_cases(state: str | None = None, limit: int = 100,
+               _auth: None = Depends(service_auth), store: Store = Depends(get_store)):
+    """Read-only list for dashboards. ?state=PENDING filters to one state;
+    omit it to list all cases, newest first. Never includes anything an
+    evaluate/recheck/approve call wouldn't already have exposed."""
+    return store.list_cases(state=state, limit=limit)
+
+
 @app.get("/cases/{shipment_id}", response_model=CaseView)
 def get_case(shipment_id: str, _auth: None = Depends(service_auth),
              store: Store = Depends(get_store)):
