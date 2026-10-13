@@ -56,25 +56,29 @@ So `action` and `decision` are the same thing: `action` is only Raja's harness v
 
 `confidence`: `AgentDecision` has none. `CheckerResult.confidence` is optional and legacy; the backend never sets it. The only live confidence is `InjectionSignal.confidence`.
 
-## 4. Open item: nothing triggers an investigation
+## 4. Investigation trigger: `POST /cases/{shipment_id}/investigate`
 
-`investigate_and_maybe_recheck()` is called only from tests. There is no endpoint and no background job, so the dashboard cannot start an investigation, and the audit trail only contains `AGENT_INVESTIGATION` events if something ran it against the same database.
+Added in `backend/api.py` (thin wrapper) with the logic in `agent/service.py`. Service key required (`X-Service-Key`, same as `/recheck` and `GET /cases`).
 
-Proposal (not implemented, not tested here because FastAPI was not installable in the review environment): a service-key endpoint in `backend/api.py`.
+Behavior:
+- Loads the case the backend already evaluated and runs one advisory investigation pass.
+- Appends one `AGENT_INVESTIGATION` entry to the audit chain per call (calling it twice adds two entries).
+- Never changes the checks, the decision or the case version.
+- Unknown shipment: `404`, nothing written to the audit chain.
+- The classifier client is chosen from the environment (`GROQ_API_KEY` or an Anthropic key); with none set, `injection_signal` is `null`.
 
-```python
-@app.post("/cases/{shipment_id}/investigate")
-def investigate(shipment_id: str, _auth: None = Depends(service_auth),
-                store: Store = Depends(get_store)):
-    from agent.orchestrator import investigate_and_maybe_recheck  # lazy: agent imports backend
-    case = store.get_case(shipment_id)
-    out = investigate_and_maybe_recheck(case, store, llm_client=None)  # pick client as in kogu_adapter
-    return {"audit_logged": out.audit_logged,
-            "recheck_requested": out.recheck_requested,
-            "investigation": out.investigation.model_dump(mode="json")}
+Response:
+
+```json
+{ "shipment_id": "SYN-S016", "case_version": 1,
+  "audit_logged": true,
+  "recheck_requested": false, "recheck_error": null, "recheck_case_version": null,
+  "investigation": { ...InvestigationResult from section 1... } }
 ```
 
-Points to settle before building it: who owns the edit (`api.py` is Bhone's), whether the dashboard calls it from a button or automatically when a case is opened, and that the orchestrator's recheck makes an HTTP call back to the same server.
+Dashboard flow: reviewer clicks the button, the dashboard calls this endpoint, then re-reads `GET /cases/{id}/audit` to draw the timeline. The `investigation` field in the response can be shown immediately.
+
+Status: `agent/service_tests.py` (4 tests) passes. The FastAPI wrapper itself was only compile-checked, because FastAPI could not be installed in the review environment; run one real request against a running backend before relying on it. If the investigation suggests a check resolved, the orchestrator calls `/recheck` over HTTP, which needs `ZTRACK_API_BASE_URL` and `ZTRACK_SERVICE_KEY` set for the backend process; without them the call is reported in `recheck_error`, not raised.
 
 ## 5. Dataset wrapper (every file in `data/dataset/`)
 

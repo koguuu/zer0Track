@@ -3,6 +3,7 @@
 Endpoints in team's outline:
 POST /cases/{shipment_id}/evaluate
 POST /cases/{shipment_id}/approve
+POST /cases/{shipment_id}/investigate   (service key; advisory agent pass)
 GET  /cases/{shipment_id}
 
 All credentials here are SYNTHETIC demo secrets supplied via environment
@@ -93,6 +94,18 @@ def recheck(shipment_id: str, request: RecheckRequest,
     set check results to PASS and may not supply arbitrary trusted data.
     """
     return store.recheck_case(shipment_id, request)
+
+
+@app.post("/cases/{shipment_id}/investigate")
+def investigate(shipment_id: str, _auth: None = Depends(service_auth),
+                store: Store = Depends(get_store)):
+    """Runs one advisory agent investigation and appends it to the audit chain
+    (kind AGENT_INVESTIGATION). Never changes checks, the decision or the case
+    version; any recheck it requests goes through the normal /recheck rules.
+    Imported lazily because agent.* imports backend.*.
+    """
+    from agent.service import investigate_case
+    return investigate_case(store, shipment_id)
 
 
 @app.post("/cases/{shipment_id}/approve", response_model=CaseView)
