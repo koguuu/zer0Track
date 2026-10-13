@@ -14,9 +14,9 @@ def render_approval_form(case, operator):
         st.caption("A mandatory check failed, so this case cannot be approved.")
 
     with st.form(f"approval_{case['shipment_id']}", clear_on_submit=True):
-        decision = st.radio("Decision", options, horizontal=True, format_func=str.title)
+        decision = st.segmented_control("Decision", options, format_func=str.title, default=options[0])
         comment = st.text_area("Reason (required)")
-        if st.form_submit_button("Save decision"):
+        if st.form_submit_button("Record decision", type="primary", icon=":material/check:"):
             if not comment.strip():
                 st.error("Add a comment before saving.")
             else:
