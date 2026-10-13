@@ -126,6 +126,35 @@ def get_case(shipment_id):
     return response.json()
 
 
+MOCK_AUDIT = {
+    "chain_valid": True,
+    "events": [
+        {"seq": 1, "kind": "EVALUATION", "recorded_at": "2026-10-13T10:00:00+00:00",
+         "payload": {"policy_decision": {"decision": "RECOMMEND_HOLD",
+                     "reason": "Identity check could not be completed."}}},
+        {"seq": 2, "kind": "AGENT_INVESTIGATION", "recorded_at": "2026-10-13T10:00:05+00:00",
+         "payload": {"unresolved_check": "identity_authority",
+                     "reasoning": "Checkpoint lookup returned no delegation record for this handler.",
+                     "tool_call": {"name": "lookup_checkpoint_authorization", "status": "no_match"},
+                     "suggests_resolved": False}},
+    ],
+}
+
+
+def get_audit(shipment_id):
+    """Full tamper-evident audit trail for a case: EVALUATION/RECHECK/APPROVAL
+    entries written by the backend plus AGENT_INVESTIGATION entries written
+    by the agent (see agent/audit_log.py) -- the human+agent timeline the
+    case detail/timeline view should actually show, not just the latest
+    AgentDecision snapshot.
+    """
+    if USE_MOCK:
+        return MOCK_AUDIT
+    response = requests.get(f"{API_BASE}/cases/{shipment_id}/audit", headers=_service_headers(), timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
 def save_approval(case, action, reason, operator):
     record = {
         "action": action,

@@ -59,7 +59,15 @@ with st.container(border=True):
 
 counts = {status: sum(c["status"] == status for c in cases) for status in
           ["pending", "flagged", "escalated", "accepted", "rejected"]}
-needs_attention = counts["flagged"] + counts["escalated"]
+# A case can be backend-state PENDING (not yet HELD/ESCALATED) while its
+# agent decision already says RECOMMEND_HOLD/REQUEST_VERIFICATION -- that
+# genuinely needs a supervisor's attention, not just routine triage, so it
+# must count here too. Previously only flagged/escalated counted, silently
+# undercounting pending cases the agent had already called out.
+pending_needs_attention = sum(
+    1 for c in cases if c["status"] == "pending" and c["decision"]["decision"] != "ACCEPT_READY"
+)
+needs_attention = counts["flagged"] + counts["escalated"] + pending_needs_attention
 metric_cols = st.columns(4)
 metric_cols[0].metric("Cases in queue", len(cases), icon=":material/inventory_2:", border=True)
 metric_cols[1].metric("Pending review", counts["pending"], icon=":material/pending:", border=True)
