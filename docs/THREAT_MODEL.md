@@ -34,14 +34,18 @@ human reviewer; it never reaches `backend/policy.py`.
 ## OWASP Top 10 for LLM Applications — mapped
 
 - **LLM01 Prompt Injection** — mitigated: see threats #1–3 above.
-- **LLM02 Sensitive Information Disclosure** — raw OTP/TAC values never appear in prompts sent to the LLM or in logs.
+- **LLM02 Sensitive Information Disclosure** — partially mitigated. Structured fields never carry a raw OTP/TAC: `ShipmentEvent` only holds `transfer_code_ref`, an opaque reference, so no code value is ever read from a structured field. Free-text `notes` are different: they are untrusted and are **not redacted**. If someone pastes a code into notes, that text is sent to the advisory LLM classifier (when one is configured), echoed (truncated to 200 characters) in the investigation reasoning, written to the audit log, and shown on the dashboard. This is covered by `agent/injection_tests.py` and is listed under known limitations below.
 - **LLM05 Improper Output Handling** — the LLM's output is rendered as plain evidence text; it is never executed, templated into a command, or used to construct a query.
-- **LLM06 Excessive Agency** — the LLM can select from a fixed, read-only, allowlisted set of lookup tools; it cannot approve, reject, register keys, or change policy.
+- **LLM06 Excessive Agency** — no LLM selects or calls any tool. Which read-only lookup runs is decided by a fixed mapping from the unresolved check (`_CHECK_TO_TOOL`), limited to an allowlist of three lookups. The only LLM call is the advisory notes classifier, which cannot approve, reject, register keys, or change policy.
 - **LLM09 Misinformation** — the policy decision is entirely deterministic and computed independently of any LLM prose; the LLM's text never becomes the source of truth for a decision.
 - **LLM10 Unbounded Consumption** — a fixed call budget (`CALL_BUDGET = 1`) and a hard timeout; exhausting either routes to operator review rather than retrying indefinitely.
 
 ## Out of scope / known limitations (stated plainly, not hidden)
 
+- Free-text notes are not redacted. A code pasted into notes reaches the
+  optional LLM classifier, the investigation reasoning (truncated), the
+  audit log and the dashboard. Planned mitigation: mask digit sequences in
+  notes before they are classified, logged or displayed; not implemented.
 - A stolen-but-still-valid OTP can pass — this system verifies
   possession of a valid code, not that the person holding it is who
   they claim to be.

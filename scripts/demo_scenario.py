@@ -46,6 +46,10 @@ def _narrate_case(case_id: str) -> None:
     from evaluation.policy_variants import POLICY_VARIANTS
 
     fixture = _load_fixture(case_id)
+    # C16 is the prompt-injection showcase, so it must run with a profile that
+    # lets the advisory classifier see the notes. "balanced" withholds notes
+    # (investigate_context=False), which would hide the very signal we demo.
+    profile = "loose" if case_id == "C16" else "balanced"
     label = None
     try:
         labels = json.loads((ROOT / "evaluation" / "private_labels.json").read_text())
@@ -64,8 +68,10 @@ def _narrate_case(case_id: str) -> None:
 
     result = evaluate_with_kogu(
         fixture=fixture, mode="rules_and_llm",
-        policy_config=POLICY_VARIANTS["balanced"], evaluation_only=True,
+        policy_config=POLICY_VARIANTS[profile], evaluation_only=True,
     )
+    print(f"  Investigation profile: {profile}"
+          + (" (notes are shown to the advisory classifier)" if profile == "loose" else ""))
 
     checks = result["checks"]
     print(f"  Mandatory checks -> parcel_code={checks.get('parcel_code')}  "
@@ -83,7 +89,7 @@ def _narrate_case(case_id: str) -> None:
         print("    -> This signal is advisory only. It is attached to the result for a human")
         print("       reviewer; it never reaches the decision below.")
     else:
-        print("  Advisory LLM signal: not available (no LLM key configured, or no notes to classify)")
+        print("  Advisory LLM signal: not available (no LLM key configured, no notes, or notes withheld by the profile)")
 
     print(f"  DECISION: {result['action']}"
           f"  (requires_human_approval={result['requires_human_approval']})")
