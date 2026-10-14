@@ -17,7 +17,7 @@ def render_approval_form(case, operator):
 
     with st.form(f"approval_{case['shipment_id']}", clear_on_submit=True):
         decision = st.segmented_control("Decision", options, format_func=str.title, default="hold")
-        comment = st.text_area("Reason (required)")
+        comment = st.text_area("Reason (required)", height=80)
         if st.form_submit_button("Record decision", type="primary", icon=":material/check:"):
             if not comment.strip():
                 st.error("Add a comment before saving.")
