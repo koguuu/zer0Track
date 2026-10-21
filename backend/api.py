@@ -19,7 +19,7 @@ from functools import lru_cache
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from backend.models import ApprovalRequest, CaseView, RecheckRequest, ShipmentEvent
+from backend.models import ApprovalRequest, CaseView, RecheckRequest, SandboxInjectionRequest, ShipmentEvent
 from backend.storage import BackendError, Store
 
 app = FastAPI(title="zer0track backend", version="0.1.0")
@@ -127,6 +127,20 @@ def list_cases(state: str | None = None, limit: int = 100,
 def get_case(shipment_id: str, _auth: None = Depends(service_auth),
              store: Store = Depends(get_store)):
     return store.get_case(shipment_id)
+
+
+@app.post("/cases/{shipment_id}/sandbox/injection-check")
+def sandbox_injection_check(shipment_id: str, request: SandboxInjectionRequest,
+                            _auth: None = Depends(service_auth), store: Store = Depends(get_store)):
+    """Live "try your own injection attack" demo: classifies request.text with
+    the advisory LLM classifier and returns it alongside the REAL stored
+    decision for shipment_id, read before classification and never written
+    to. Read-only and side-effect-free -- nothing here touches the audit
+    chain or the case. Imported lazily because agent.* imports backend.*.
+    See agent/sandbox.py's module docstring for the full isolation argument.
+    """
+    from agent.sandbox import run_injection_sandbox
+    return run_injection_sandbox(store, shipment_id, request.text)
 
 
 @app.get("/cases/{shipment_id}/audit")

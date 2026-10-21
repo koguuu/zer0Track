@@ -34,18 +34,33 @@ human reviewer; it never reaches `backend/policy.py`.
 ## OWASP Top 10 for LLM Applications — mapped
 
 - **LLM01 Prompt Injection** — mitigated: see threats #1–3 above.
-- **LLM02 Sensitive Information Disclosure** — partially mitigated. Structured fields never carry a raw OTP/TAC: `ShipmentEvent` only holds `transfer_code_ref`, an opaque reference, so no code value is ever read from a structured field. Free-text `notes` are different: they are untrusted and are **not redacted**. If someone pastes a code into notes, that text is sent to the advisory LLM classifier (when one is configured), echoed (truncated to 200 characters) in the investigation reasoning, written to the audit log, and shown on the dashboard. This is covered by `agent/injection_tests.py` and is listed under known limitations below.
+- **LLM02 Sensitive Information Disclosure** — mitigated. Structured fields never carry a raw OTP/TAC: `ShipmentEvent` only holds `transfer_code_ref`, an opaque reference, so no code value is ever read from a structured field. Free-text `notes` are untrusted, and a 4+ digit run (the shape of a typical OTP/TAC) is now masked with asterisks (`agent/redaction.py`) at every point of use — before the advisory LLM classifier ever sees it, before it's echoed into the investigation reasoning that gets written to the audit log, and before the dashboard renders it. The raw submitted notes stay intact in storage (the append-only audit chain must not silently rewrite evidence); only outbound uses are masked. Covered by `agent/redaction_tests.py` and the strengthened `agent/injection_tests.py::test_notes_derived_text_never_reaches_tool_arguments`.
 - **LLM05 Improper Output Handling** — the LLM's output is rendered as plain evidence text; it is never executed, templated into a command, or used to construct a query.
 - **LLM06 Excessive Agency** — no LLM selects or calls any tool. Which read-only lookup runs is decided by a fixed mapping from the unresolved check (`_CHECK_TO_TOOL`), limited to an allowlist of three lookups. The only LLM call is the advisory notes classifier, which cannot approve, reject, register keys, or change policy.
 - **LLM09 Misinformation** — the policy decision is entirely deterministic and computed independently of any LLM prose; the LLM's text never becomes the source of truth for a decision.
 - **LLM10 Unbounded Consumption** — a fixed call budget (`CALL_BUDGET = 1`) and a hard timeout; exhausting either routes to operator review rather than retrying indefinitely.
 
+## OWASP Top 10 (Web) — mapped
+
+This is a FastAPI backend + Streamlit dashboard, so the standard web OWASP
+Top 10:2021 applies alongside the LLM-specific one above. Same rule as
+that table: stated plainly, including what's still open.
+
+| # | Category | Status | Notes |
+|---|---|---|---|
+| A01 | Broken Access Control | Mitigated | Three separate credential types (courier/supervisor/service), each scoped to only the endpoints it needs (`backend/api.py`'s `courier_auth`/`supervisor_auth`/`service_auth`). A failed mandatory check can never be bypassed through any API path — enforced in `backend/policy.py`, not at the edge. |
+| A02 | Cryptographic Failures | Mitigated | Audit entries are HMAC-signed and hash-linked (`backend/audit.py`). Credential comparison uses `hmac.compare_digest` throughout, not `==` (timing-attack resistant). Timestamps are rejected if not timezone-aware rather than silently treated as UTC. |
+| A03 | Injection | Mitigated | SQL: all queries in `backend/storage.py` are parameterized, zero string-formatted SQL. XSS: the dashboard escapes every untrusted field (`html.escape()` in `dashboard/views/timeline.py`) before rendering. Prompt injection is covered separately above (LLM01). |
+| A04 | Insecure Design | Mitigated | The core design choice of this whole system — LLM/agent output is advisory-only and structurally cannot reach `backend/policy.py` — is this category's mitigation, proven by `agent/injection_detector_tests.py::test_injection_signal_never_changes_investigation_outcome`. |
+| A05 | Security Misconfiguration | **Open** | `FastAPI(title=..., version=...)` in `backend/api.py` has no `docs_url=None`/`redoc_url=None`/`openapi_url=None`, so Swagger UI and the full OpenAPI schema are served unauthenticated at `/docs` and `/openapi.json` by default, exposing the entire API surface to anyone who finds the URL. No CORS policy is configured either — acceptable for a prototype not meant to be called cross-origin from a browser, but that should be stated here explicitly rather than left silent. Planned fix: disable the auto-docs routes (or gate them behind `service_auth`) and add an explicit CORS statement; not yet implemented. |
+| A06 | Vulnerable/Outdated Components | **Open** | `requirements.txt` pins no versions at all (`streamlit`, `pandas`, `fastapi`, `uvicorn`, `pydantic`, `requests` are all unpinned). A future install could silently pull a breaking or vulnerable release. Planned fix: pin exact versions; not yet implemented. |
+| A07 | Identification and Authentication Failures | Partially mitigated | Courier/service credentials are real per-principal secrets checked with constant-time comparison. The dashboard's supervisor-side login is weaker: it's currently a free-text operator-ID field with a single shared token, not a real per-operator login with lockout — see the staff-login work in progress. |
+| A08 | Software/Data Integrity Failures | Mitigated | The hash-linked, HMAC-signed audit chain (`backend/audit.py::verify_audit_chain`) detects any after-the-fact edit to a past entry; independently re-verifiable offline via `scripts/verify_audit_log.py`, not just trusted on write. Approvals are version-bound so a stale/replayed one is rejected (`backend/storage.py`). |
+| A09 | Security Logging and Monitoring Failures | Mitigated | The append-only audit log covering EVALUATION/RECHECK/APPROVAL/AGENT_INVESTIGATION is arguably this system's strongest category — see the "Audit log tampering" row in the threat table above. |
+| A10 | Server-Side Request Forgery | N/A | Nothing in this codebase makes a server-side HTTP request to a user-supplied URL. The agent's tool calls (`agent/tools.py`) are fixed, internal, read-only lookups against the trusted store — never attacker-influenced destinations. Listed here as a deliberately ruled-out category, not a silently skipped one. |
+
 ## Out of scope / known limitations (stated plainly, not hidden)
 
-- Free-text notes are not redacted. A code pasted into notes reaches the
-  optional LLM classifier, the investigation reasoning (truncated), the
-  audit log and the dashboard. Planned mitigation: mask digit sequences in
-  notes before they are classified, logged or displayed; not implemented.
 - A stolen-but-still-valid OTP can pass — this system verifies
   possession of a valid code, not that the person holding it is who
   they claim to be.

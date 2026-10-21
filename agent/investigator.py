@@ -76,6 +76,7 @@ from backend.models import CaseView, Status
 from agent.injection_detector import detect_injection_signal
 from agent.llm_client import LLMClient
 from agent.models import InvestigationResult, ToolCallRecord, ToolName
+from agent.redaction import redact_digit_sequences
 from agent.tools import ToolRegistry
 
 CALL_BUDGET = 1
@@ -122,12 +123,16 @@ NOTES_PREVIEW_MAX_CHARS = 200
 
 
 def _safe_notes_preview(notes: str | None) -> str | None:
-    """Returns notes as an inert, truncated display string only. Never
-    parsed, never evaluated, never used as input to any decision.
+    """Returns notes as an inert, truncated, digit-redacted display string
+    only. Never parsed, never evaluated, never used as input to any
+    decision. This is what ends up in InvestigationResult.reasoning, which
+    agent/audit_log.py writes into the audit chain -- so redacting here is
+    what keeps a pasted OTP/TAC out of permanent audit storage, not just
+    off the LLM call (see agent/redaction.py's docstring).
     """
     if not notes:
         return None
-    flattened = " ".join(notes.split())
+    flattened = " ".join(redact_digit_sequences(notes).split())
     if len(flattened) > NOTES_PREVIEW_MAX_CHARS:
         flattened = flattened[:NOTES_PREVIEW_MAX_CHARS] + "…"
     return flattened
@@ -158,8 +163,12 @@ def run_investigation(
 
     # Computed once, independent of everything below: see the hard-rules
     # bullet above and injection_detector.py's module docstring for why
-    # this can never influence any branch that follows.
-    injection_signal = detect_injection_signal(case.event.notes, llm_client)
+    # this can never influence any branch that follows. Digits are masked
+    # BEFORE this leaves the process -- an OTP/TAC pasted into notes must
+    # never reach a third-party LLM API call in the clear. Masking can only
+    # ever make an injected instruction less readable to the classifier,
+    # never more convincing, so this cannot weaken detection by construction.
+    injection_signal = detect_injection_signal(redact_digit_sequences(case.event.notes), llm_client)
 
     if not unresolved:
         return InvestigationResult(

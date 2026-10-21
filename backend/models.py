@@ -123,6 +123,18 @@ class RecheckRequest(StrictModel):
     reason: str = Field(default="New independently verified evidence available", min_length=3, max_length=1000)
 
 
+class SandboxInjectionRequest(StrictModel):
+    """Request body for the live injection-sandbox demo endpoint.
+
+    Deliberately just one field: arbitrary attack text a judge/reviewer
+    types in. There is no way to pass a decision, a case mutation, or any
+    other side-effecting field here by design -- see agent/sandbox.py's
+    module docstring for why this endpoint is read-only by construction,
+    not just by convention.
+    """
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class ApprovalRequest(StrictModel):
     action: Literal["accept", "hold", "reject", "escalate"]
     expected_case_version: int = Field(ge=1)
