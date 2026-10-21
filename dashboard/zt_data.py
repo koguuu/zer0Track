@@ -16,43 +16,6 @@ def _service_headers():
     return {"X-Service-Key": SERVICE_KEY} if SERVICE_KEY else {}
 
 
-# NOTE for whoever wires up the staff-login screen (Nour): save_approval()
-# below still reads the single shared SUPERVISOR_TOKEN env var, same as
-# before -- that's the exact gap the login screen is meant to close. Once
-# there's a per-session verified token (e.g. in st.session_state after a
-# successful verify_login() call), swap save_approval's header to use that
-# instead of this module-level SUPERVISOR_TOKEN, and swap app.py's free-text
-# "Supervisor ID" input for the session's verified operator_id so it can't
-# be retyped as someone else mid-session.
-
-
-def verify_login(operator_id, token):
-    """Checks an operator ID + token pair against the backend's real
-    supervisor credentials (same ones /approve enforces) before the
-    dashboard shows any case/approval UI. Returns (ok, error_message).
-    In MOCK mode there's no real backend to check against, so any
-    non-empty operator ID is accepted -- this mirrors MOCK's existing
-    "demo data" badge, not a security boundary.
-    """
-    if not operator_id.strip() or not token.strip():
-        return False, "Enter both an operator ID and a token."
-    if USE_MOCK:
-        return True, None
-    try:
-        response = requests.post(
-            f"{API_BASE}/auth/verify",
-            headers={"X-Operator-Id": operator_id, "X-Supervisor-Token": token},
-            timeout=10,
-        )
-    except requests.RequestException as e:
-        return False, f"Could not reach the API at {API_BASE}: {e}"
-    if response.status_code == 200:
-        return True, None
-    if response.status_code == 429:
-        return False, "Too many failed attempts for this operator ID. Wait a minute and try again."
-    return False, "Invalid operator ID or token."
-
-
 def _check(name, status, detail, evidence_ids=(), confidence=None):
     passed = {"PASS": True, "FAIL": False, "UNKNOWN": None}[status]
     return {
