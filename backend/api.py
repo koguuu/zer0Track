@@ -14,6 +14,8 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import time
+from collections import defaultdict
 from functools import lru_cache
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -39,6 +41,34 @@ def _lookup_credentials(env_key: str, principal: str, secret: str) -> bool:
     return bool(isinstance(correct, str) and correct and hmac.compare_digest(correct, secret))
 
 
+# In-memory brute-force guard for supervisor login, keyed by claimed operator
+# ID. Single-process only (fine for this prototype's one uvicorn worker; a
+# real deployment would use a shared store). Not applied to courier/service
+# auth: couriers are machine-authenticated per delivery, not a login a human
+# repeatedly guesses at from a UI, and the service key is operator-invisible.
+_LOGIN_ATTEMPT_LIMIT = 5
+_LOGIN_LOCKOUT_SECONDS = 60
+_failed_logins: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_lockout(principal: str) -> None:
+    now = time.monotonic()
+    attempts = [t for t in _failed_logins[principal] if now - t < _LOGIN_LOCKOUT_SECONDS]
+    _failed_logins[principal] = attempts
+    if len(attempts) >= _LOGIN_ATTEMPT_LIMIT:
+        raise HTTPException(status_code=429, detail=(
+            f"Too many failed login attempts for this operator ID; "
+            f"try again in under {_LOGIN_LOCKOUT_SECONDS} seconds."))
+
+
+def _record_failed_login(principal: str) -> None:
+    _failed_logins[principal].append(time.monotonic())
+
+
+def _clear_failed_logins(principal: str) -> None:
+    _failed_logins.pop(principal, None)
+
+
 def courier_auth(
     x_courier_id: str | None = Header(default=None),
     x_courier_token: str | None = Header(default=None),
@@ -54,10 +84,13 @@ def supervisor_auth(
     x_operator_id: str | None = Header(default=None),
     x_supervisor_token: str | None = Header(default=None),
 ) -> str:
-    if not x_operator_id or not x_supervisor_token or not _lookup_credentials(
-        "ZTRACK_SUPERVISOR_TOKENS", x_operator_id, x_supervisor_token
-    ):
+    if not x_operator_id or not x_supervisor_token:
         raise HTTPException(status_code=401, detail="Invalid supervisor demo credentials")
+    _check_lockout(x_operator_id)
+    if not _lookup_credentials("ZTRACK_SUPERVISOR_TOKENS", x_operator_id, x_supervisor_token):
+        _record_failed_login(x_operator_id)
+        raise HTTPException(status_code=401, detail="Invalid supervisor demo credentials")
+    _clear_failed_logins(x_operator_id)
     return x_operator_id
 
 
@@ -75,6 +108,18 @@ async def backend_error_handler(_request, exc: BackendError):
 @app.get("/health")
 def health():
     return {"status": "ok", "mode": "synthetic-prototype"}
+
+
+@app.post("/auth/verify")
+def verify_supervisor(operator_id: str = Depends(supervisor_auth)):
+    """Confirms an X-Operator-Id/X-Supervisor-Token pair is valid, for a
+    dashboard login screen to check before showing the approval UI. No case
+    access, no side effects beyond the same lockout bookkeeping supervisor_auth
+    already does on every call. A 401/429 here means the same call would fail
+    identically on a real /approve, so the dashboard can fail fast at login
+    instead of discovering a bad credential mid-decision.
+    """
+    return {"operator_id": operator_id, "authenticated": True}
 
 
 @app.post("/cases/{shipment_id}/evaluate", response_model=CaseView)
