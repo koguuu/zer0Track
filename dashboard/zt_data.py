@@ -183,19 +183,3 @@ def save_approval(case, action, reason, operator):
                              headers=headers, timeout=10)
     response.raise_for_status()
     return response.json()
-
-
-def run_injection_sandbox(shipment_id, text):
-    """Calls POST /cases/{id}/sandbox/injection-check: classifies arbitrary
-    text live and returns it alongside the real, already-stored decision for
-    shipment_id (read before classification, never written to). Read-only on
-    the backend -- nothing here touches the audit chain or the case. Has no
-    mock-mode branch on purpose: the whole point of this panel is to show a
-    REAL backend case's decision staying fixed, which pure UI mock data can't
-    demonstrate, so it always calls the live API and raises clearly if that
-    isn't reachable or the case isn't seeded there yet.
-    """
-    response = requests.post(f"{API_BASE}/cases/{shipment_id}/sandbox/injection-check",
-                             json={"text": text}, headers=_service_headers(), timeout=15)
-    response.raise_for_status()
-    return response.json()

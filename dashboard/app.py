@@ -6,7 +6,6 @@ import zt_data as data
 from views.case_list import render_case_list
 from views.timeline import render_timeline
 from views.approval import render_approval_form
-from views.sandbox import render_injection_sandbox
 
 st.set_page_config(page_title="zer0Track", page_icon="📦", layout="wide")
 st.markdown("""<style>
@@ -91,7 +90,6 @@ with right:
         case = data.get_case(sid)
         render_timeline(case)
         render_approval_form(case, operator)
-        render_injection_sandbox(case["shipment_id"])
     else:
         with st.container(border=True):
             st.markdown("### :material/ads_click: Choose a case to investigate")
