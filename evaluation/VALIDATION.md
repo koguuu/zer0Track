@@ -64,12 +64,33 @@ Added `evaluation/export_dashboard.py`, the generated
 `evaluation/results/dashboard_comparison.json`, and
 [`DASHBOARD_EXPORT.md`](DASHBOARD_EXPORT.md) for Nour's comparison view.
 
-`python -m unittest evaluation.test_export_dashboard -v` passed **9 exporter
+`python -m unittest evaluation.test_export_dashboard -v` passed **11 exporter
 tests**. `python -m evaluation.export_dashboard` successfully validated the
 stored report, including its recomputed summary metrics and matching case sets.
 It produced 20 case pairs per profile, 120 exported configuration rows, no
 unavailable pairs and zero changed recommendations. The compact export is
-44,594 bytes versus the original 554,814 bytes (91.96% smaller).
+44,594 bytes versus the committed source's 538,919 bytes (91.73% smaller).
+
+### Provenance correction — 22 October 2026
+
+The supplied Windows source used CRLF line endings (554,814 bytes). Its parsed
+data matches the committed source, but those exact bytes have a different hash.
+Restored `evaluation/results/results.json` byte-for-byte from the supplied
+repository's HEAD (`7551867`): **538,919 bytes**, SHA-256
+`60533a1e8a40706f5bdf3dd536b68720458d75f4c35aabfcfa3d4825bdc094ff`.
+Regenerated the comparison export against those bytes and verified
+`metadata.source_sha256` matches. All profile summaries and paired case results
+remain identical to the previous export; only export provenance and its creation
+timestamp changed.
+
+Added LF attributes for these two JSON paths and explicit LF output in the
+evaluation and export writers. The read-only command
+`python -m evaluation.export_dashboard --check` passes on this snapshot and
+fails when only the source line endings change, without writing either file.
+Regression tests cover exact CRLF hashing, input immutability and LF export
+output. No API credentials or live provider calls are needed for these checks.
+The existing 28 tests in `evaluation.test_raja` also passed, for 39 passing
+tests across these two evaluation modules.
 
 The stored report's original timestamp is 13 October 2026. Its 180 source rows
 reuse 20 synthetic cases across nine configurations; they are not 180 independent
@@ -79,7 +100,8 @@ valid proofs in each profile. Service-reported LLM case counts are 0 for strict,
 
 This task validates the export of the stored snapshot. It does not rerun the
 backend, provider calls, existing application tests or live dashboard. The
-original evaluation files are preserved. The source file hash is recorded in
+evaluation values are preserved; the source line endings match the committed
+file. The source file hash is recorded in
 the export for provenance. The historical integration notes below remain dated
 records of earlier work.
 

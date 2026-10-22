@@ -193,19 +193,39 @@ def main(argv=None):
     parser.add_argument("--output", type=Path,
                         default=ROOT / "evaluation/results/dashboard_comparison.json")
     parser.add_argument("--pretty", action="store_true", help="Indent JSON for manual inspection.")
+    parser.add_argument("--check", action="store_true",
+                        help="Check an existing export against the exact input bytes; write nothing.")
     args = parser.parse_args(argv)
     try:
         _require(args.input.resolve() != args.output.resolve(), "Output must not overwrite input.")
         raw = args.input.read_bytes()
-        payload = build_export(json.loads(raw), source_sha256=hashlib.sha256(raw).hexdigest())
-        content = json.dumps(payload, ensure_ascii=False, allow_nan=False,
-                             indent=2 if args.pretty else None,
-                             separators=None if args.pretty else (",", ":")) + "\n"
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(content, encoding="utf-8")
+        source_sha256 = hashlib.sha256(raw).hexdigest()
+        exported_at = None
+        if args.check:
+            stored = json.loads(args.output.read_bytes())
+            _require(isinstance(stored, dict) and isinstance(stored.get("metadata"), dict),
+                     "Existing export lacks metadata; regenerate the export.")
+            _require(stored["metadata"].get("source_sha256") == source_sha256,
+                     "source_sha256 does not match the exact input bytes; regenerate the export.")
+            exported_at = stored["metadata"].get("exported_at")
+            _require(isinstance(exported_at, str) and bool(exported_at),
+                     "Existing export lacks an export timestamp; regenerate the export.")
+        payload = build_export(json.loads(raw), source_sha256=source_sha256,
+                               exported_at=exported_at)
+        if args.check:
+            _require(stored == payload, "Existing export data is stale; regenerate the export.")
+        else:
+            content = json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                                 indent=2 if args.pretty else None,
+                                 separators=None if args.pretty else (",", ":")) + "\n"
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(content, encoding="utf-8", newline="\n")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         parser.error(str(exc))
-    print(f"Exported {payload['metadata']['unique_case_count']} cases across 3 profiles: {args.output}")
+    if args.check:
+        print(f"Export verified against exact input bytes: {args.output}")
+    else:
+        print(f"Exported {payload['metadata']['unique_case_count']} cases across 3 profiles: {args.output}")
     return 0
 
 

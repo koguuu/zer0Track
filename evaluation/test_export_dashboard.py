@@ -1,6 +1,9 @@
 """Check honest comparisons, summary validation and exclusion of raw fields."""
 
 import copy
+from contextlib import redirect_stderr
+import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -123,7 +126,6 @@ class DashboardExportTests(unittest.TestCase):
             build_export(report)
 
     def test_cli_records_source_hash_and_prevents_overwrite(self):
-        import hashlib
         with tempfile.TemporaryDirectory() as temp:
             source, output = Path(temp) / "results.json", Path(temp) / "dashboard.json"
             source.write_text(json.dumps(sample_report()), encoding="utf-8")
@@ -134,6 +136,39 @@ class DashboardExportTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 main(["--input", str(source), "--output", str(source)])
             self.assertEqual(source.read_bytes(), before)
+
+    def test_cli_hashes_crlf_input_exactly_and_writes_lf_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, output = Path(temp) / "results.json", Path(temp) / "dashboard.json"
+            raw = (json.dumps(sample_report(), indent=2) + "\n").replace("\n", "\r\n").encode()
+            source.write_bytes(raw)
+            self.assertEqual(main(["--input", str(source), "--output", str(output), "--pretty"]), 0)
+            payload = json.loads(output.read_bytes())
+            self.assertEqual(payload["metadata"]["source_sha256"], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(source.read_bytes(), raw)
+            self.assertNotIn(b"\r\n", output.read_bytes())
+            self.assertTrue(output.read_bytes().endswith(b"\n"))
+
+    def test_check_rejects_newline_only_source_drift_without_writing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, output = Path(temp) / "results.json", Path(temp) / "dashboard.json"
+            raw = (json.dumps(sample_report(), indent=2) + "\n").encode()
+            source.write_bytes(raw)
+            args = ["--input", str(source), "--output", str(output)]
+            self.assertEqual(main(args), 0)
+            exported = output.read_bytes()
+            self.assertEqual(main(args + ["--check"]), 0)
+            self.assertEqual(output.read_bytes(), exported)
+            changed = raw.replace(b"\n", b"\r\n")
+            self.assertEqual(json.loads(raw), json.loads(changed))
+            source.write_bytes(changed)
+            with redirect_stderr(io.StringIO()) as errors:
+                with self.assertRaises(SystemExit) as failure:
+                    main(args + ["--check"])
+            self.assertEqual(failure.exception.code, 2)
+            self.assertIn("source_sha256 does not match", errors.getvalue())
+            self.assertEqual(source.read_bytes(), changed)
+            self.assertEqual(output.read_bytes(), exported)
 
 
 if __name__ == "__main__":

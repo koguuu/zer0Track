@@ -274,7 +274,7 @@ def write_results(rows, output_dir=None, *, dataset=None):
               "dataset_sha256": hashlib.sha256(json.dumps(dataset, sort_keys=True, allow_nan=False).encode()).hexdigest() if dataset is not None else None,
               "llm_usage_is_service_reported": True, "operator_review_time_measured": False,
               "summary": summaries, "rows": rows}
-    (folder / "results.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    (folder / "results.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8", newline="\n")
     _csv(folder / "metrics.csv", summaries, [key for key in summaries[0] if key != "missed_case_ids"])
     _csv(folder / "predictions.csv", rows, ["case_id", "label", "category", "profile", "mode", "status", "expected_action", "observed_action", "invalid_proof", "latency_ms", "llm_used", "agent_invoked", "error"])
     def text(value):

@@ -14,6 +14,7 @@ the standard library and `evaluation/metrics.py`; it needs no API credentials.
 
 ```bash
 python -m evaluation.export_dashboard
+python -m evaluation.export_dashboard --check
 python -m unittest evaluation.test_export_dashboard -v
 ```
 
@@ -28,6 +29,31 @@ python -m evaluation.export_dashboard --input evaluation/results/results.json --
 Regenerate the export after regenerating evaluation results. `--pretty` is
 optional; the default output is compact JSON. The input cannot be overwritten
 by the exporter. Validation happens before writing the output.
+
+`--check` is read-only: it recomputes the exact input-byte hash and validates the
+existing export's contents without changing either file. A stale hash or stale
+comparison data causes a non-zero exit. Run it before committing the export.
+
+### Exact-byte provenance across Windows and Unix
+
+The root `.gitattributes` pins `evaluation/results/results.json` and
+`evaluation/results/dashboard_comparison.json` to LF line endings. Both JSON
+writers also explicitly write LF on Windows. This keeps the input bytes stable
+between the working copy and the committed Git blob. The recorded hash remains
+the SHA-256 of the bytes actually read; the exporter does not normalize the
+input before hashing or silently substitute a hash of equivalent JSON data.
+
+For an older Windows working copy that still contains CRLF, normalize just the
+source line endings before regenerating the export:
+
+```bash
+python -c "from pathlib import Path; p = Path('evaluation/results/results.json'); p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))"
+python -m evaluation.export_dashboard
+python -m evaluation.export_dashboard --check
+```
+
+Include `.gitattributes`, both JSON files and the writer changes in the same
+commit. After any evaluation rerun, regenerate and check the comparison export.
 
 ## Schema version 1
 
@@ -157,8 +183,16 @@ The included source evaluation was generated on **13 October 2026**. Exporting
 it on 22 October does not make it a fresh pipeline evaluation.
 
 It contains 20 unique synthetic cases, 180 source configuration rows and 120
-exported rows. The generated compact file is 44,594 bytes, compared with 554,814
-bytes for the source (91.96% smaller).
+exported rows. The generated compact file is 44,594 bytes, compared with 538,919
+bytes for the source (91.73% smaller).
+
+The source is byte-for-byte identical to `evaluation/results/results.json` in
+the supplied repository's HEAD (`7551867`), with SHA-256
+`60533a1e8a40706f5bdf3dd536b68720458d75f4c35aabfcfa3d4825bdc094ff`.
+The older 554,814-byte Windows copy used CRLF, which added 15,895 bytes and
+produced a different hash despite identical parsed evaluation data. This fix
+restores the committed LF bytes and regenerates the export; it does not rerun
+or change the evaluation measurements.
 
 | Profile | Successful pairs | Changed recommendations | Agent-invoked cases | Tool calls | Service-reported LLM cases |
 |---|---:|---:|---:|---:|---:|
@@ -173,9 +207,10 @@ matched private expected answers. The additional lookups did not change the
 recommendations in this snapshot; improved accuracy or operator time is not
 established.
 
-Nine focused exporter tests passed. They cover correct pair/metric handling,
+Eleven focused exporter tests passed. They cover correct pair/metric handling,
 LLM-versus-agent usage distinctions, exclusion of raw nested fields, source
 immutability, duplicate/missing pairs, summary mismatches, failed/pending pairs,
-changed recommendations, non-finite timing, input hashes and overwrite refusal.
+changed recommendations, non-finite timing, input hashes, overwrite refusal,
+CRLF input preservation, LF output and rejection of newline-only provenance drift.
 Existing backend, agent and dashboard behavior was not re-benchmarked by this
 export task.

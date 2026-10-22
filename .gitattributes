@@ -1,0 +1,3 @@
+# Keep exact-byte evaluation provenance stable in Windows and Unix checkouts.
+/evaluation/results/results.json text eol=lf
+/evaluation/results/dashboard_comparison.json text eol=lf
