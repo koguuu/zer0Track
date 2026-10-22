@@ -1,7 +1,9 @@
 """Raja: synthetic input fixtures, private labels and optional real-model validation.
 
-Payloads follow Bhone's uploaded backend.models; schema.md remains provisional.
-No backend checker, custody state transition or investigator is implemented.
+Payloads follow backend/models.py, the locked schema (schema.md, the old v1
+draft, was removed once it stopped matching the code). Backend checkers,
+policy/custody state transitions and the agent investigator are all
+implemented now (backend/checkers.py, backend/policy.py, agent/investigator.py).
 """
 
 import argparse
@@ -336,8 +338,8 @@ def generate_shipment(label: str, *, case_index=0, shipment_mapper=None,
                       shipment_model=None, require_team_schema=False, draft=False) -> dict:
     """Assigned interface. Returns an event only, never its answer label.
 
-    Matches Bhone's uploaded models and validates with the actual class when
-    present. The team schema.md lock is still pending.
+    Matches backend/models.py and validates with the actual class when
+    present. The schema is locked there now (schema.md was removed).
     """
     if label not in LABELS:
         raise ValueError("Choose a label from: " + ", ".join(LABELS))
