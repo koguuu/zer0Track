@@ -1,4 +1,4 @@
-﻿"""FastAPI endpoint layer for zer0track's simulated-delivery prototype.
+"""FastAPI endpoint layer for zer0track's simulated-delivery prototype.
 
 Endpoints in team's outline:
 POST /cases/{shipment_id}/evaluate
@@ -70,6 +70,71 @@ def service_auth(x_service_key: str | None = Header(default=None)) -> None:
 @app.exception_handler(BackendError)
 async def backend_error_handler(_request, exc: BackendError):
     return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
+
+
+from pydantic import BaseModel
+from backend.staff_auth import verify_staff, create_staff_session, verify_staff_session, revoke_staff_session
+
+
+class StaffLoginRequest(BaseModel):
+    operator_id: str
+    token: str
+
+
+@app.post("/auth/login")
+def staff_login(request: StaffLoginRequest, store: Store = Depends(get_store)):
+    result = verify_staff(store, request.operator_id, request.token)
+
+    if result == "locked":
+        raise HTTPException(
+            status_code=429,
+            detail="Account temporarily locked"
+        )
+
+    if result != "ok":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"
+        )
+
+    session = create_staff_session(store, request.operator_id.strip())
+    return {
+        "authenticated": True,
+        **session
+    }
+
+
+
+@app.post("/auth/verify")
+def verify_login(
+    x_session_token: str | None = Header(default=None),
+    store: Store = Depends(get_store),
+):
+    operator_id = verify_staff_session(store, x_session_token or "")
+    if operator_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    return {"authenticated": True, "operator_id": operator_id}
+
+
+
+@app.post("/auth/logout")
+def staff_logout(
+    x_session_token: str | None = Header(default=None),
+    store: Store = Depends(get_store),
+):
+    if not x_session_token:
+        raise HTTPException(status_code=401, detail="Missing session token")
+
+    operator_id = verify_staff_session(store, x_session_token)
+
+    if operator_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    revoke_staff_session(store, x_session_token)
+
+    return {"logged_out": True}
 
 
 @app.get("/health")
