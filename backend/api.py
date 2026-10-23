@@ -1,4 +1,4 @@
-"""FastAPI endpoint layer for zer0track's simulated-delivery prototype.
+﻿"""FastAPI endpoint layer for zer0track's simulated-delivery prototype.
 
 Endpoints in team's outline:
 POST /cases/{shipment_id}/evaluate
@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from backend.models import ApprovalRequest, CaseView, RecheckRequest, ShipmentEvent
 from backend.storage import BackendError, Store
 
-app = FastAPI(title="zer0track backend", version="0.1.0")
+app = FastAPI(title="zer0track backend", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @lru_cache(maxsize=1)
@@ -136,3 +136,4 @@ def audit_trail(shipment_id: str, _auth: None = Depends(service_auth),
     with store.connect() as conn:
         return {"chain_valid": verify_audit_chain(conn, os.environ.get("ZTRACK_AUDIT_ANCHOR_PATH")),
                 "events": get_audit_trail(shipment_id, conn)}
+
