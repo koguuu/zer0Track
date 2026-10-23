@@ -18,8 +18,8 @@ zer0track/
 ├── agent/                     # Kogu — LLM investigator, tool allowlist, injection tests
 ├── data/                      # Raja — synthetic dataset generation
 ├── evaluation/                # Raja — baseline/rules/LLM comparison, metrics
-├── dashboard/                 # Nour — Streamlit dashboard, investigation timeline, demo
-└── docs/                      # Win — proposal, pitch deck, role outlines, threat model, agent output contract
+├── dashboard/                 # Nour — Streamlit dashboard, investigation timeline
+└── docs/                      # Win — proposal, pitch deck, role outlines, threat model, agent output contract, demo
 ```
 
 ## Workflow
