@@ -194,6 +194,37 @@ def get_case(shipment_id: str, _auth: None = Depends(service_auth),
     return store.get_case(shipment_id)
 
 
+
+@app.get("/cases/{shipment_id}/geofence")
+def get_geofence(
+    shipment_id: str,
+    _auth: None = Depends(service_auth),
+    store: Store = Depends(get_store),
+):
+    """Return approved checkpoint areas for the dashboard map."""
+    case = store.get_case(shipment_id)
+
+    with store.connect() as conn:
+        trusted = store._trusted(conn, shipment_id)
+
+    checkpoints = []
+    if trusted is not None:
+        for checkpoint in trusted.checkpoints:
+            if checkpoint.handoff_type == case.event.handoff_type:
+                checkpoints.append({
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "latitude": checkpoint.latitude,
+                    "longitude": checkpoint.longitude,
+                    "radius_m": checkpoint.radius_m,
+                })
+
+    return {
+        "shipment_id": shipment_id,
+        "handoff_type": case.event.handoff_type,
+        "checkpoints": checkpoints,
+    }
+
+
 @app.get("/cases/{shipment_id}/audit")
 def audit_trail(shipment_id: str, _auth: None = Depends(service_auth),
                 store: Store = Depends(get_store)):
