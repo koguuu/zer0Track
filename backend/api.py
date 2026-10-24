@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from backend.models import ApprovalRequest, CaseView, RecheckRequest, ShipmentEvent
 from backend.storage import BackendError, Store
 
-app = FastAPI(title="zer0track backend", version="0.1.0")
+app = FastAPI(title="zer0track backend", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @lru_cache(maxsize=1)
@@ -70,6 +70,71 @@ def service_auth(x_service_key: str | None = Header(default=None)) -> None:
 @app.exception_handler(BackendError)
 async def backend_error_handler(_request, exc: BackendError):
     return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
+
+
+from pydantic import BaseModel
+from backend.staff_auth import verify_staff, create_staff_session, verify_staff_session, revoke_staff_session
+
+
+class StaffLoginRequest(BaseModel):
+    operator_id: str
+    token: str
+
+
+@app.post("/auth/login")
+def staff_login(request: StaffLoginRequest, store: Store = Depends(get_store)):
+    result = verify_staff(store, request.operator_id, request.token)
+
+    if result == "locked":
+        raise HTTPException(
+            status_code=429,
+            detail="Account temporarily locked"
+        )
+
+    if result != "ok":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"
+        )
+
+    session = create_staff_session(store, request.operator_id.strip())
+    return {
+        "authenticated": True,
+        **session
+    }
+
+
+
+@app.post("/auth/verify")
+def verify_login(
+    x_session_token: str | None = Header(default=None),
+    store: Store = Depends(get_store),
+):
+    operator_id = verify_staff_session(store, x_session_token or "")
+    if operator_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    return {"authenticated": True, "operator_id": operator_id}
+
+
+
+@app.post("/auth/logout")
+def staff_logout(
+    x_session_token: str | None = Header(default=None),
+    store: Store = Depends(get_store),
+):
+    if not x_session_token:
+        raise HTTPException(status_code=401, detail="Missing session token")
+
+    operator_id = verify_staff_session(store, x_session_token)
+
+    if operator_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    revoke_staff_session(store, x_session_token)
+
+    return {"logged_out": True}
 
 
 @app.get("/health")
@@ -129,6 +194,37 @@ def get_case(shipment_id: str, _auth: None = Depends(service_auth),
     return store.get_case(shipment_id)
 
 
+
+@app.get("/cases/{shipment_id}/geofence")
+def get_geofence(
+    shipment_id: str,
+    _auth: None = Depends(service_auth),
+    store: Store = Depends(get_store),
+):
+    """Return approved checkpoint areas for the dashboard map."""
+    case = store.get_case(shipment_id)
+
+    with store.connect() as conn:
+        trusted = store._trusted(conn, shipment_id)
+
+    checkpoints = []
+    if trusted is not None:
+        for checkpoint in trusted.checkpoints:
+            if checkpoint.handoff_type == case.event.handoff_type:
+                checkpoints.append({
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "latitude": checkpoint.latitude,
+                    "longitude": checkpoint.longitude,
+                    "radius_m": checkpoint.radius_m,
+                })
+
+    return {
+        "shipment_id": shipment_id,
+        "handoff_type": case.event.handoff_type,
+        "checkpoints": checkpoints,
+    }
+
+
 @app.get("/cases/{shipment_id}/audit")
 def audit_trail(shipment_id: str, _auth: None = Depends(service_auth),
                 store: Store = Depends(get_store)):
@@ -136,3 +232,4 @@ def audit_trail(shipment_id: str, _auth: None = Depends(service_auth),
     with store.connect() as conn:
         return {"chain_valid": verify_audit_chain(conn, os.environ.get("ZTRACK_AUDIT_ANCHOR_PATH")),
                 "events": get_audit_trail(shipment_id, conn)}
+
