@@ -80,6 +80,13 @@ class Store:
                 payload_fingerprint TEXT NOT NULL, response TEXT NOT NULL)""")
             conn.execute("""CREATE TABLE IF NOT EXISTS handler_evaluations(
                 shipment_id TEXT PRIMARY KEY, authenticated_handler_id TEXT NOT NULL)""")
+            conn.execute('CREATE TABLE IF NOT EXISTS staff_login_attempts (operator_id TEXT PRIMARY KEY, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until TEXT, updated_at TEXT NOT NULL)')
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS staff_sessions ("
+                "token_hash TEXT PRIMARY KEY, "
+                "operator_id TEXT NOT NULL, "
+                "expires_at TEXT NOT NULL)"
+            )
             setup_audit(conn)
 
     def seed_trusted(self, manifest: TrustedShipmentRecord, code: TransferCodeRecord) -> None:

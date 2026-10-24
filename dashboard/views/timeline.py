@@ -1,13 +1,37 @@
 import html
 import pydeck as pdk
+import re
 import streamlit as st
 
+import zt_data as data
+
 BADGE_COLORS = {"PASS": "green", "FAIL": "red", "UNKNOWN": "orange"}
+
+# Mirrors agent/redaction.py's rule exactly (4+ consecutive digits -> same-
+# length asterisks). Duplicated here on purpose: the dashboard is a thin
+# API client that doesn't import the agent package, so this is a small,
+# self-contained copy rather than a cross-package import. Keep both in
+# sync if the masking rule changes -- see agent/redaction.py's docstring
+# for the full rationale (point-of-use redaction, raw evidence stays
+# intact in storage).
+_DIGIT_RUN = re.compile(r"\d{4,}")
+
+
+def _redact_digits(text):
+    if text is None:
+        return None
+    return _DIGIT_RUN.sub(lambda m: "*" * len(m.group()), text)
+AUDIT_KIND_ICONS = {
+    "EVALUATION": ":material/fact_check:",
+    "RECHECK": ":material/sync:",
+    "AGENT_INVESTIGATION": ":material/psychology:",
+    "APPROVAL": ":material/how_to_reg:",
+}
 
 
 def _escape_audit_text(value):
     if isinstance(value, str):
-        return html.escape(value)
+        return html.escape(_redact_digits(value))
     if isinstance(value, dict):
         return {key: _escape_audit_text(child) for key, child in value.items()}
     if isinstance(value, list):
@@ -47,7 +71,7 @@ def render_timeline(case, audit=None, audit_error=None, investigation_result=Non
             unresolved = ", ".join(html.escape(x.replace("_", " ")) for x in d["unresolved_checks"])
             st.caption(f"Unresolved · {unresolved}")
     if event.get("notes"):
-        st.caption(f"Handoff note · {html.escape(event['notes'])}")
+        st.caption(f"Handoff note · {html.escape(_redact_digits(event['notes']))}")
     if d["requires_human_approval"]:
         st.warning("Supervisor approval required before this case can move.")
 
@@ -156,7 +180,7 @@ def render_case_panel(case, audit=None, geofence=None, geofence_error=None):
     handoff = event.get("handoff_type", "handoff").replace("_", " ").title()
     st.caption(f"{html.escape(handoff)} handoff · Handler {html.escape(event['handler_id'])} · Case v{case['version']}")
     if event.get("notes"):
-        st.caption(f"Handoff note · {html.escape(event['notes'])}")
+        st.caption(f"Handoff note · {html.escape(_redact_digits(event['notes']))}")
     investigations = [
         item.get("payload", {}) for item in (audit or {}).get("events", [])
         if str(item.get("kind", "")).upper() == "AGENT_INVESTIGATION"

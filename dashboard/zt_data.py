@@ -186,6 +186,11 @@ def get_audit_trail(shipment_id):
     return response.json()
 
 
+def get_audit(shipment_id):
+    """Compatibility alias for the audit helper used by the main branch."""
+    return get_audit_trail(shipment_id)
+
+
 def get_geofence(shipment_id):
     """Fetch trusted checkpoint coordinates and radii for a case."""
     if USE_MOCK:

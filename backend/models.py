@@ -1,4 +1,6 @@
-"""zer0track backend data contract — provisional until team's schema.md is locked.
+"""zer0track backend data contract — this IS the locked schema. schema.md (the
+old v1 draft) was removed once it stopped matching the code; this file and
+docs/AGENT_OUTPUT_CONTRACT.md are the current source of truth.
 
 The proposal requires PASS/FAIL/UNKNOWN and role outline mentions `passed` and
 `confidence`. `passed` is tri-state to preserve UNKNOWN, while `confidence` is

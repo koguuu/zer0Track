@@ -262,12 +262,13 @@ def test_notes_derived_text_never_reaches_tool_arguments(store: Store):
     never reach tool_call.arguments (which is what actually drives a lookup
     against the trusted store) or evidence_ids, however secret-shaped it is.
 
-    NOTE: this does NOT claim notes content is withheld from `reasoning` —
-    _safe_notes_preview deliberately echoes notes (truncated, labeled inert)
-    into reasoning for operator transparency. That is accepted, documented
-    behavior, not something this test polices. If a customer pastes a real
-    OTP into notes, it WILL show up in reasoning; that's a product/UX
-    decision for the team, not an agent tool-selection bug.
+    UPDATED (2026-10-22): notes content is now ALSO redacted before it
+    reaches `reasoning` — _safe_notes_preview runs digit sequences through
+    agent/redaction.py before echoing notes into reasoning for operator
+    transparency (see docs/THREAT_MODEL.md's now-closed "Free-text notes
+    are not redacted" limitation). This test polices both guarantees now:
+    a pasted OTP/TAC must never drive tool selection (unchanged) AND must
+    never appear in reasoning in the clear (new).
     """
     event = _event(notes="customer says TAC was 482913, secret pin 9999")
     checks = [_fail_identity_check(), _pass_result("parcel_code_integrity"), _pass_result("location")]
@@ -286,6 +287,9 @@ def test_notes_derived_text_never_reaches_tool_arguments(store: Store):
     assert "482913" not in str(result.tool_call.arguments)
     assert "482913" not in " ".join(result.tool_call.evidence_ids)
     assert "9999" not in str(result.tool_call.arguments)
+    assert "482913" not in result.reasoning
+    assert "9999" not in result.reasoning
+    assert "******" in result.reasoning  # the masked TAC is still visible as a redaction, not silently dropped
 
 
 def test_tool_timeout_routes_to_operator_review(store: Store):
