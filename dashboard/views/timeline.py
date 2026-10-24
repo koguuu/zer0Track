@@ -1,4 +1,5 @@
 import html
+import pydeck as pdk
 import streamlit as st
 
 BADGE_COLORS = {"PASS": "green", "FAIL": "red", "UNKNOWN": "orange"}
@@ -141,7 +142,7 @@ def render_timeline(case, audit=None, audit_error=None, investigation_result=Non
                 st.json(safe_payload, expanded=True)
 
 
-def render_case_panel(case):
+def render_case_panel(case, audit=None, geofence=None, geofence_error=None):
     """Compact case summary for the focused review drawer."""
     event = case["event"]
     decision = case["decision"]
@@ -156,6 +157,14 @@ def render_case_panel(case):
     st.caption(f"{html.escape(handoff)} handoff · Handler {html.escape(event['handler_id'])} · Case v{case['version']}")
     if event.get("notes"):
         st.caption(f"Handoff note · {html.escape(event['notes'])}")
+    investigations = [
+        item.get("payload", {}) for item in (audit or {}).get("events", [])
+        if str(item.get("kind", "")).upper() == "AGENT_INVESTIGATION"
+    ]
+    mode = st.segmented_control(
+        "Decision view", ["Rules decision", "Rules + agent"], default="Rules + agent",
+        key=f"decision_view_{case['shipment_id']}", label_visibility="collapsed",
+    )
     st.markdown(f"**:material/psychology: {html.escape(decision['recommended_action'])}**")
     st.caption(html.escape(decision["reason"]))
     if decision.get("unresolved_checks"):
@@ -163,6 +172,23 @@ def render_case_panel(case):
         st.caption(f"Unresolved · {names}")
     if decision.get("requires_human_approval"):
         st.warning("Supervisor approval required before this case can move.")
+    if mode == "Rules + agent" and investigations:
+        latest = investigations[-1]
+        st.caption("Advisory investigation · does not change the rules decision")
+        call = latest.get("tool_call")
+        if call:
+            safe_call = _escape_audit_text(call)
+            st.markdown(f"**Tool:** {html.escape(str(safe_call.get('tool_name', 'Lookup')))}")
+            if safe_call.get("arguments"):
+                arguments = ", ".join(f"{key}={value}" for key, value in safe_call["arguments"].items())
+                st.caption(f"Arguments · {html.escape(arguments)}")
+            if safe_call.get("result_summary"):
+                st.write(html.escape(str(safe_call["result_summary"])))
+            if safe_call.get("evidence_ids"):
+                evidence = ", ".join(html.escape(str(value)) for value in safe_call["evidence_ids"])
+                st.caption(f"Tool evidence · {evidence}")
+        elif latest.get("reasoning"):
+            st.write(html.escape(str(latest["reasoning"])))
 
     st.markdown("**:material/rule: Mandatory checks**")
     checks = case.get("checks", [])
@@ -191,6 +217,50 @@ def render_case_panel(case):
             st.markdown(f"**{html.escape(approval['action'].title())}** by {html.escape(approval['operator_id'])}")
             st.write(html.escape(approval["reason"]))
 
+    location = event.get("location") or {}
+    checkpoints = (geofence or {}).get("checkpoints", [])
+    map_rows = []
+    if location.get("latitude") is not None and location.get("longitude") is not None:
+        map_rows.append({"latitude": location["latitude"], "longitude": location["longitude"],
+                         "radius_m": 12, "label": "Reported handoff"})
+    for index, checkpoint in enumerate(checkpoints, start=1):
+        if checkpoint.get("latitude") is not None and checkpoint.get("longitude") is not None:
+            map_rows.append({"latitude": checkpoint["latitude"], "longitude": checkpoint["longitude"],
+                             "radius_m": max(1, float(checkpoint.get("radius_m") or 30)),
+                             "label": str(checkpoint.get("checkpoint_id") or f"Checkpoint {index}")})
+    if map_rows or geofence_error:
+        with st.expander("Handoff location and geofence", expanded=bool(checkpoints)):
+            if map_rows:
+                center = map_rows[0]
+                layer = pdk.Layer(
+                    "ScatterplotLayer", data=map_rows[:1], get_position="[longitude, latitude]",
+                    get_radius="radius_m", radius_units="meters", get_fill_color="[255, 75, 75, 155]",
+                    get_line_color="[255, 255, 255, 210]", line_width_min_pixels=1,
+                    pickable=True, auto_highlight=True,
+                )
+                checkpoint_layer = pdk.Layer(
+                    "ScatterplotLayer", data=map_rows[1:], get_position="[longitude, latitude]",
+                    get_radius="radius_m", radius_units="meters", get_fill_color="[94, 224, 188, 65]",
+                    get_line_color="[94, 224, 188, 230]", line_width_min_pixels=2,
+                    pickable=True, auto_highlight=True,
+                )
+                st.pydeck_chart(
+                    pdk.Deck(
+                        layers=[checkpoint_layer, layer],
+                        initial_view_state=pdk.ViewState(latitude=center["latitude"], longitude=center["longitude"],
+                                                         zoom=15, pitch=0),
+                        tooltip={"text": "{label} · radius {radius_m} m"},
+                        map_style="dark",
+                    ),
+                    height=260,
+                    use_container_width=True,
+                )
+                st.caption("Red circle: reported handoff marker. Green circles: authorized checkpoint boundaries at their configured radii.")
+            if geofence_error:
+                st.caption(f"Checkpoint geofence unavailable: {html.escape(str(geofence_error))}")
+            if not checkpoints and not geofence_error:
+                st.caption("No matching authorized checkpoint was returned for this case.")
+
 
 def render_audit_panel(audit, audit_error=None, investigation_result=None):
     """Compact audit and investigation view for the focused review drawer."""
@@ -213,7 +283,28 @@ def render_audit_panel(audit, audit_error=None, investigation_result=None):
     else:
         st.badge("Audit chain status unavailable", color="gray")
 
-    investigations = [event for event in audit.get("events", [])
+    events = audit.get("events", [])
+    if events:
+        st.markdown("**Case lifecycle**")
+        with st.container(horizontal=True, wrap=True, gap="small"):
+            for event in events:
+                kind = str(event.get("kind", "AUDIT")).replace("_", " ").title()
+                st.badge(kind, icon=":material/check_circle:", color="green")
+        with st.expander("Hash-chain entries", expanded=False):
+            rows = [{
+                "Seq": event.get("seq"),
+                "Event": event.get("kind"),
+                "Recorded": event.get("recorded_at"),
+                "Previous hash": str(event.get("prev_hash") or "GENESIS")[:18],
+                "Entry hash": str(event.get("entry_hash") or "")[:18],
+                "MAC": str(event.get("mac") or "")[:18],
+            } for event in events]
+            st.dataframe(rows, hide_index=True, width="stretch",
+                         height=min(260, 42 + 36 * len(rows)),
+                         alt="Audit event sequence and hash-chain links")
+            st.caption("Hash prefixes are shown for readability; chain validity is reported above.")
+
+    investigations = [event for event in events
                        if str(event.get("kind", "")).upper() == "AGENT_INVESTIGATION"]
     if not investigations:
         st.caption(":material/info: Not yet investigated")

@@ -2,7 +2,7 @@
 import zt_data as data
 
 
-def render_approval_form(case, operator):
+def render_approval_form(case, operator, supervisor_token=None):
     """Supervisor can approve, hold or reject with a comment. Cannot bypass a failed mandatory check."""
     st.markdown("##### Supervisor decision")
     if case["state"].upper() != "PENDING":
@@ -23,7 +23,7 @@ def render_approval_form(case, operator):
                 st.error("Add a comment before saving.")
             else:
                 try:
-                    data.save_approval(case, decision, comment.strip(), operator)
+                    data.save_approval(case, decision, comment.strip(), operator, supervisor_token)
                     st.success(f"{decision} saved for {case['shipment_id']}.")
                     st.rerun()
                 except Exception as e:

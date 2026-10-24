@@ -17,6 +17,40 @@ def _service_headers():
     return {"X-Service-Key": SERVICE_KEY} if SERVICE_KEY else {}
 
 
+def login_staff(operator_id, token):
+    response = requests.post(
+        f"{API_BASE}/auth/login",
+        json={"operator_id": operator_id, "token": token},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def verify_staff_session(session_token):
+    response = requests.post(
+        f"{API_BASE}/auth/verify",
+        headers={"X-Session-Token": session_token},
+        timeout=10,
+    )
+    if response.status_code == 401:
+        return None
+    response.raise_for_status()
+    return response.json()
+
+
+def logout_staff(session_token):
+    response = requests.post(
+        f"{API_BASE}/auth/logout",
+        headers={"X-Session-Token": session_token},
+        timeout=10,
+    )
+    if response.status_code == 401:
+        return False
+    response.raise_for_status()
+    return response.json().get("logged_out", False)
+
+
 def _check(name, status, detail, evidence_ids=(), confidence=None):
     passed = {"PASS": True, "FAIL": False, "UNKNOWN": None}[status]
     return {
@@ -152,6 +186,34 @@ def get_audit_trail(shipment_id):
     return response.json()
 
 
+def get_geofence(shipment_id):
+    """Fetch trusted checkpoint coordinates and radii for a case."""
+    if USE_MOCK:
+        return {"shipment_id": shipment_id, "checkpoints": []}
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/geofence",
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_investigation_count(cases):
+    """Count recorded investigation events across the visible case list."""
+    count = 0
+    for case in cases:
+        try:
+            audit = get_audit_trail(case["shipment_id"])
+        except requests.RequestException:
+            continue
+        count += sum(
+            str(event.get("kind", "")).upper() == "AGENT_INVESTIGATION"
+            for event in audit.get("events", [])
+        )
+    return count
+
+
 def investigate_case(shipment_id):
     """Run one advisory investigation pass and return its result."""
     if USE_MOCK:
@@ -185,7 +247,7 @@ def investigate_case(shipment_id):
     return response.json()
 
 
-def save_approval(case, action, reason, operator):
+def save_approval(case, action, reason, operator, supervisor_token=None):
     if case.get("state", "").upper() != "PENDING":
         raise ValueError("Only pending cases can receive an approval decision.")
     if action == "accept" and not can_accept(case):
@@ -212,9 +274,10 @@ def save_approval(case, action, reason, operator):
         case["state"] = {"accept": "accepted", "hold": "flagged",
                           "reject": "rejected", "escalate": "escalated"}[action]
         return approval
-    if not SUPERVISOR_TOKEN:
-        raise RuntimeError("Set ZT_SUPERVISOR_TOKEN to submit an approval to the backend.")
-    headers = {"X-Operator-Id": operator, "X-Supervisor-Token": SUPERVISOR_TOKEN}
+    token = supervisor_token or SUPERVISOR_TOKEN
+    if not token:
+        raise RuntimeError("Sign in with your staff token before submitting an approval.")
+    headers = {"X-Operator-Id": operator, "X-Supervisor-Token": token}
     response = requests.post(f"{API_BASE}/cases/{case['shipment_id']}/approve", json=record,
                              headers=headers, timeout=10)
     response.raise_for_status()
