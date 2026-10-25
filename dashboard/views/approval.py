@@ -41,12 +41,15 @@ def render_approval_form(case, operator, supervisor_token=None, audit=None):
         st.caption("Accept is available only when all three checks pass and the agent decision is ACCEPT_READY.")
 
     default = pending["action"] if pending and not same_operator and pending["action"] in options else "hold"
-    with st.form(f"approval_{case['shipment_id']}", clear_on_submit=True):
-        decision = st.segmented_control("Decision", options, format_func=str.title, default=default)
-        comment = st.text_area("Reason (required)", height=80)
+    shipment_id = case["shipment_id"]
+    with st.form(f"approval_{shipment_id}", clear_on_submit=True):
+        decision = st.segmented_control("Decision", options, format_func=str.title, default=default,
+                                        key=f"approval_decision_{shipment_id}")
+        comment = st.text_area("Reason (required)", height=80, key=f"approval_reason_{shipment_id}")
         label = ("Confirm decision" if pending and not same_operator else
                  "Request decision" if decision in data.DUAL_APPROVAL_ACTIONS else "Record decision")
-        if st.form_submit_button(label, type="primary", icon=":material/check:"):
+        if st.form_submit_button(label, type="primary", icon=":material/check:",
+                                 key=f"approval_submit_{shipment_id}"):
             if not comment.strip():
                 st.error("Add a comment before saving.")
             else:
