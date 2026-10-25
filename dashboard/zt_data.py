@@ -11,6 +11,7 @@ SERVICE_KEY = os.getenv("ZT_SERVICE_KEY", "")
 OPERATOR_ID = os.getenv("ZT_OPERATOR_ID", "")
 SUPERVISOR_TOKEN = os.getenv("ZT_SUPERVISOR_TOKEN", "")
 MANDATORY_CHECKERS = {"parcel_code_integrity", "identity_authority", "location"}
+DUAL_APPROVAL_ACTIONS = {"escalate", "reject"}
 
 
 def _service_headers():
@@ -176,7 +177,11 @@ def can_accept(case):
 def get_audit_trail(shipment_id):
     """Read audit entries and chain status for a case."""
     if USE_MOCK:
-        return {"chain_valid": True, "events": st.session_state.get("audit_events", {}).get(shipment_id, [])}
+        return {
+            "chain_valid": True,
+            "events": st.session_state.get("audit_events", {}).get(shipment_id, []),
+            "pending_dual_approval": st.session_state.get("pending_dual_approvals", {}).get(shipment_id),
+        }
     response = requests.get(
         f"{API_BASE}/cases/{shipment_id}/audit",
         headers=_service_headers(),
@@ -197,6 +202,34 @@ def get_geofence(shipment_id):
         return {"shipment_id": shipment_id, "checkpoints": []}
     response = requests.get(
         f"{API_BASE}/cases/{shipment_id}/geofence",
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_tamper_demo(shipment_id, seq):
+    """Read-only 'what if this entry were edited?' demonstration for the
+    hash-chain visualizer. Never mutates the real audit log either in mock
+    mode or against the live backend -- see backend/audit.py's
+    simulate_tamper for how the real version recomputes the actual chain.
+    """
+    if USE_MOCK:
+        events = st.session_state.get("audit_events", {}).get(shipment_id, [])
+        later = [e.get("seq") for e in events if e.get("seq", 0) > seq]
+        return {
+            "tampered_seq": seq,
+            "diverges_at_seq": seq,
+            "chain_would_still_verify": False,
+            "note": "Demo mode has no real hash chain to recompute, so this illustrates the "
+                    "concept only: editing one entry's payload changes its hash, and every "
+                    "later entry's stored link to it (" + (f"seq {later}" if later else "none here") +
+                    ") would then fail to match.",
+        }
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/audit/tamper-demo",
+        params={"seq": seq},
         headers=_service_headers(),
         timeout=10,
     )
@@ -266,6 +299,36 @@ def save_approval(case, action, reason, operator, supervisor_token=None):
     if USE_MOCK:
         if not reason.strip():
             raise ValueError("A reason is required.")
+        pending_all = st.session_state.setdefault("pending_dual_approvals", {})
+        pending = pending_all.get(case["shipment_id"])
+        if action in DUAL_APPROVAL_ACTIONS:
+            if pending is None:
+                pending_all[case["shipment_id"]] = {
+                    "action": action, "reason": reason,
+                    "expected_case_version": case["version"],
+                    "requested_by": operator,
+                    "requested_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                }
+                return dict(case)  # unchanged, still PENDING; not yet finalized
+            if pending["requested_by"] == operator:
+                if pending["action"] == action:
+                    raise ValueError(f"You already requested '{action}' on this case; "
+                                      "a different operator must confirm it before it is final.")
+                pending_all[case["shipment_id"]] = {
+                    "action": action, "reason": reason,
+                    "expected_case_version": case["version"],
+                    "requested_by": operator,
+                    "requested_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                }
+                return dict(case)  # unchanged, still PENDING; not yet finalized
+            if pending["action"] != action:
+                raise ValueError(f"Operator {pending['requested_by']} already requested "
+                                  f"'{pending['action']}' on this case; confirm or replace that first.")
+            reason = f"{reason} (confirms '{pending['action']}' requested by {pending['requested_by']}: {pending['reason']})"
+            pending_all.pop(case["shipment_id"], None)
+        elif pending is not None:
+            raise ValueError(f"A pending '{pending['action']}' request by {pending['requested_by']} "
+                              "is awaiting a second operator's confirmation; resolve it before any other action.")
         approval = {
             "approval_id": record["approval_request_id"],
             "shipment_id": case["shipment_id"],

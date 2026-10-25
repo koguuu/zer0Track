@@ -147,6 +147,7 @@ def evaluate(shipment_id: str, event: ShipmentEvent,
              handler_id: str = Depends(courier_auth), store: Store = Depends(get_store)):
     if shipment_id != event.shipment_id:
         raise HTTPException(status_code=400, detail="Path shipment ID differs from body")
+    store.check_rate_limit(handler_id)
     return store.evaluate_case(event, handler_id)
 
 
@@ -230,6 +231,33 @@ def audit_trail(shipment_id: str, _auth: None = Depends(service_auth),
                 store: Store = Depends(get_store)):
     from backend.audit import get_audit_trail, verify_audit_chain
     with store.connect() as conn:
+        pending_row = conn.execute(
+            "SELECT * FROM pending_dual_approvals WHERE shipment_id=?", (shipment_id,)
+        ).fetchone()
+        pending = dict(pending_row) if pending_row else None
         return {"chain_valid": verify_audit_chain(conn, os.environ.get("ZTRACK_AUDIT_ANCHOR_PATH")),
-                "events": get_audit_trail(shipment_id, conn)}
+                "events": get_audit_trail(shipment_id, conn),
+                "pending_dual_approval": pending}
+
+
+@app.get("/cases/{shipment_id}/audit/tamper-demo")
+def audit_tamper_demo(shipment_id: str, seq: int,
+                      _auth: None = Depends(service_auth), store: Store = Depends(get_store)):
+    """Read-only, side-effect-free demonstration of hash-chain tamper detection
+    for the dashboard's audit visualizer. Never writes to the real audit log;
+    it recomputes the real signing logic in memory with one entry's payload
+    swapped for an illustrative fake one, so a judge can see the chain break
+    without anyone actually tampering with evidence. See backend/audit.py's
+    simulate_tamper for how this differs from verify_audit_chain.
+    """
+    from backend.audit import simulate_tamper
+    fake_payload = {
+        "demo": True,
+        "note": "This payload is a what-if shown only by this read-only endpoint; nothing was written.",
+    }
+    with store.connect() as conn:
+        try:
+            return simulate_tamper(conn, shipment_id, seq, fake_payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 

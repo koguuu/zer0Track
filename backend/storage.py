@@ -25,6 +25,11 @@ class BackendError(Exception):
         super().__init__(message)
 
 
+# Actions that can send a case to an irreversible negative outcome require a
+# second, different operator's confirmation before they take effect.
+DUAL_APPROVAL_ACTIONS = {"escalate", "reject"}
+
+
 def _json(model) -> str:
     return model.model_dump_json()
 
@@ -87,6 +92,13 @@ class Store:
                 "operator_id TEXT NOT NULL, "
                 "expires_at TEXT NOT NULL)"
             )
+            conn.execute("""CREATE TABLE IF NOT EXISTS pending_dual_approvals(
+                shipment_id TEXT PRIMARY KEY, action TEXT NOT NULL, reason TEXT NOT NULL,
+                expected_case_version INTEGER NOT NULL, requested_by TEXT NOT NULL,
+                requested_at TEXT NOT NULL)""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS evaluate_rate_limits(
+                courier_id TEXT PRIMARY KEY, window_started_at TEXT NOT NULL,
+                request_count INTEGER NOT NULL)""")
             setup_audit(conn)
 
     def seed_trusted(self, manifest: TrustedShipmentRecord, code: TransferCodeRecord) -> None:
@@ -149,6 +161,47 @@ class Store:
                     "SELECT * FROM cases ORDER BY rowid DESC LIMIT ?", (limit,)
                 ).fetchall()
             return [self._from_row(row) for row in rows]
+
+    def check_rate_limit(self, courier_id: str, *, max_requests: int | None = None,
+                         window_seconds: int | None = None, now: datetime | None = None) -> None:
+        """Fixed-window per-courier limit on /evaluate. Raises BackendError(429) over budget.
+
+        Deliberately separate from evaluate_case itself: it rate-limits the
+        authenticated courier principal, not the shipment's business data, so
+        a repeated call for the same shipment still counts against the
+        courier who submitted it, and a malicious/broken courier integration
+        hammering the endpoint cannot starve others sharing the backend.
+        """
+        max_requests = max_requests if max_requests is not None else int(
+            os.environ.get("ZTRACK_EVALUATE_RATE_LIMIT_MAX", "30"))
+        window_seconds = window_seconds if window_seconds is not None else int(
+            os.environ.get("ZTRACK_EVALUATE_RATE_LIMIT_WINDOW_SECONDS", "60"))
+        now = now or datetime.now(timezone.utc)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM evaluate_rate_limits WHERE courier_id=?", (courier_id,)
+            ).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO evaluate_rate_limits VALUES (?,?,?)",
+                             (courier_id, _utc_iso(now), 1))
+                conn.commit()
+                return
+            window_started = datetime.fromisoformat(row["window_started_at"])
+            if (now - window_started).total_seconds() >= window_seconds:
+                conn.execute(
+                    "UPDATE evaluate_rate_limits SET window_started_at=?, request_count=1 WHERE courier_id=?",
+                    (_utc_iso(now), courier_id))
+                conn.commit()
+                return
+            if row["request_count"] >= max_requests:
+                raise BackendError(
+                    429, f"Rate limit exceeded: at most {max_requests} /evaluate calls "
+                         f"per {window_seconds}s per courier; try again shortly")
+            conn.execute(
+                "UPDATE evaluate_rate_limits SET request_count=request_count+1 WHERE courier_id=?",
+                (courier_id,))
+            conn.commit()
 
     def evaluate_case(self, event: ShipmentEvent, authenticated_handler_id: str) -> CaseView:
         fp = _fingerprint(event)
@@ -267,6 +320,52 @@ class Store:
             # never refresh a case; use the authenticated /recheck endpoint.
             if checks != case.checks or decision != case.decision:
                 raise BackendError(409, "Evidence or policy has changed; recheck case before approval")
+
+            # Escalate/reject require a second, different operator to confirm
+            # before the case is finalized. Accept and hold stay single-step:
+            # accept already requires every mandatory check to PASS, and hold
+            # is the conservative default action, so neither needs the extra
+            # gate. The pending request itself is never trusted to finalize
+            # anything on its own -- the confirming call re-runs every check
+            # above (version, drift, state) exactly as a fresh approval would.
+            pending = conn.execute(
+                "SELECT * FROM pending_dual_approvals WHERE shipment_id=?", (shipment_id,)
+            ).fetchone()
+            confirmed_request = None
+            if req.action in DUAL_APPROVAL_ACTIONS:
+                if pending is None:
+                    conn.execute("""INSERT INTO pending_dual_approvals
+                        (shipment_id, action, reason, expected_case_version, requested_by, requested_at)
+                        VALUES (?,?,?,?,?,?)""", (
+                        shipment_id, req.action, req.reason, case.version, operator_id, _utc_iso(now)))
+                    append_audit(conn, shipment_id, "DUAL_APPROVAL_REQUESTED", {
+                        "action": req.action, "reason": req.reason, "requested_by": operator_id,
+                        "evidence_version": case.version})
+                    conn.commit()
+                    return case
+                if pending["requested_by"] == operator_id:
+                    if pending["action"] == req.action:
+                        raise BackendError(409, f"You already requested '{req.action}' on this case; "
+                                                 "a different operator must confirm it before it is final")
+                    # Same operator changing their mind before anyone confirmed: replace it.
+                    conn.execute("""UPDATE pending_dual_approvals SET action=?, reason=?,
+                        expected_case_version=?, requested_at=? WHERE shipment_id=?""", (
+                        req.action, req.reason, case.version, _utc_iso(now), shipment_id))
+                    append_audit(conn, shipment_id, "DUAL_APPROVAL_REQUESTED", {
+                        "action": req.action, "reason": req.reason, "requested_by": operator_id,
+                        "evidence_version": case.version, "replaces_prior_request": True})
+                    conn.commit()
+                    return case
+                if pending["action"] != req.action:
+                    raise BackendError(409, f"Operator {pending['requested_by']} already requested "
+                                             f"'{pending['action']}' on this case; that must be confirmed "
+                                             "or replaced before a different action can be taken")
+                confirmed_request = pending
+            elif pending is not None:
+                raise BackendError(409, f"A pending '{pending['action']}' request by "
+                                         f"{pending['requested_by']} is awaiting a second operator's "
+                                         "confirmation; resolve it before any other action")
+
             if req.action == "accept":
                 if decision.decision != "ACCEPT_READY":
                     raise BackendError(409, "Mandatory evidence is not all PASS; cannot accept")
@@ -293,15 +392,22 @@ class Store:
                     new_state = "ESCALATED"
                 else:
                     new_state = "REJECTED"
+            if confirmed_request is not None:
+                final_reason = (f"{req.reason} (confirms '{confirmed_request['action']}' requested by "
+                                 f"{confirmed_request['requested_by']}: {confirmed_request['reason']})")
+            else:
+                final_reason = req.reason
             record = ApprovalRecord(approval_id=str(uuid.uuid4()), shipment_id=shipment_id,
                 evidence_version=case.version, operator_id=operator_id,
-                action=req.action, reason=req.reason)
+                action=req.action, reason=final_reason)
             updated = CaseView(shipment_id=shipment_id, version=case.version, state=new_state,
                 event=case.event, checks=checks, decision=decision, approval=record)
             conn.execute("""UPDATE cases SET state=?, checks=?, decision=?, approval=?
                 WHERE shipment_id=? AND version=?""", (
                 new_state, json.dumps([x.model_dump(mode="json") for x in checks]),
                 _json(decision), _json(record), shipment_id, case.version))
+            if confirmed_request is not None:
+                conn.execute("DELETE FROM pending_dual_approvals WHERE shipment_id=?", (shipment_id,))
             log_approval(record, conn)
             conn.execute("INSERT INTO seen_approvals VALUES(?,?,?,?)", (
                 req.approval_request_id, shipment_id, approval_fp, _json(updated)))

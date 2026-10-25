@@ -93,6 +93,63 @@ def verify_audit_chain(conn: sqlite3.Connection, anchor_path: str | None = None)
     return True
 
 
+def simulate_tamper(conn: sqlite3.Connection, shipment_id: str, seq: int, fake_payload: dict) -> dict:
+    """Read-only demonstration of why the hash chain catches a tampered entry.
+
+    Never writes anything and never touches the real audit_log table. It
+    recomputes the SAME digest/HMAC the real chain uses (backend/audit.py's
+    own signing logic, not a re-implementation of it) with exactly one past
+    entry's payload swapped for `fake_payload`, and reports where the
+    recomputed chain first diverges from what is actually stored -- for a
+    judge-facing visualizer, not an attack tool against production data.
+
+    Raises ValueError if no entry with that (shipment_id, seq) exists.
+    """
+    key = _secret()
+    rows = conn.execute("SELECT * FROM audit_log ORDER BY seq").fetchall()
+    if not any(row["shipment_id"] == shipment_id and row["seq"] == seq for row in rows):
+        raise ValueError(f"No audit entry with seq={seq} for shipment {shipment_id!r}")
+
+    previous = GENESIS
+    diverges_at_seq = None
+    entries = []
+    for row in rows:
+        is_tampered_entry = row["seq"] == seq
+        payload_text = _canonical(fake_payload) if is_tampered_entry else row["payload"]
+        msg = _canonical({"shipment_id": row["shipment_id"], "kind": row["kind"],
+                          "recorded_at": row["recorded_at"], "payload": payload_text,
+                          "prev_hash": row["prev_hash"]})
+        recomputed_hash = hashlib.sha256(msg.encode()).hexdigest()
+        recomputed_mac = hmac.new(key, recomputed_hash.encode(), hashlib.sha256).hexdigest()
+        prev_hash_matches = row["prev_hash"] == previous
+        hash_matches = hmac.compare_digest(recomputed_hash, row["entry_hash"])
+        mac_matches = hmac.compare_digest(recomputed_mac, row["mac"])
+        still_valid = prev_hash_matches and hash_matches and mac_matches
+        if not still_valid and diverges_at_seq is None:
+            diverges_at_seq = row["seq"]
+        entries.append({
+            "seq": row["seq"], "shipment_id": row["shipment_id"], "kind": row["kind"],
+            "is_tampered_entry": is_tampered_entry,
+            "stored_entry_hash": row["entry_hash"],
+            "recomputed_entry_hash": recomputed_hash,
+            "chain_link_valid": still_valid,
+        })
+        # The simulated attacker edits only the one entry's payload and
+        # leaves every later row's prev_hash exactly as recorded -- exactly
+        # what verify_audit_chain checks against. The running hash still
+        # follows the REAL recomputed value so later, untouched entries are
+        # compared against what actually happened, not against the tamper.
+        previous = recomputed_hash if is_tampered_entry else row["entry_hash"]
+
+    return {
+        "tampered_seq": seq,
+        "fake_payload": fake_payload,
+        "diverges_at_seq": diverges_at_seq,
+        "entries": entries,
+        "chain_would_still_verify": diverges_at_seq is None,
+    }
+
+
 def export_checkpoint(conn: sqlite3.Connection, path: str) -> dict:
     """Write a signed checkpoint. Store path outside mutable database/storage area."""
     row = conn.execute("SELECT seq, entry_hash FROM audit_log ORDER BY seq DESC LIMIT 1").fetchone()

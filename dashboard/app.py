@@ -93,7 +93,7 @@ def _show_case_dialog(shipment_id, operator):
                 st.session_state[f"investigation_result_{shipment_id}"] = result.get("investigation", result)
             except Exception as error:
                 st.error(f"Investigation failed: {error}")
-        render_approval_form(case, operator, st.session_state.get("staff_supervisor_token"))
+        render_approval_form(case, operator, st.session_state.get("staff_supervisor_token"), audit)
         render_audit_panel(audit, audit_error, st.session_state.get(f"investigation_result_{shipment_id}"))
 
 st.markdown("""<style>
