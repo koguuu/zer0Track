@@ -10,10 +10,46 @@ USE_MOCK = os.getenv("ZT_MOCK", "1") == "1"
 SERVICE_KEY = os.getenv("ZT_SERVICE_KEY", "")
 OPERATOR_ID = os.getenv("ZT_OPERATOR_ID", "")
 SUPERVISOR_TOKEN = os.getenv("ZT_SUPERVISOR_TOKEN", "")
+MANDATORY_CHECKERS = {"parcel_code_integrity", "identity_authority", "location"}
+DUAL_APPROVAL_ACTIONS = {"escalate", "reject"}
 
 
 def _service_headers():
     return {"X-Service-Key": SERVICE_KEY} if SERVICE_KEY else {}
+
+
+def login_staff(operator_id, token):
+    response = requests.post(
+        f"{API_BASE}/auth/login",
+        json={"operator_id": operator_id, "token": token},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def verify_staff_session(session_token):
+    response = requests.post(
+        f"{API_BASE}/auth/verify",
+        headers={"X-Session-Token": session_token},
+        timeout=10,
+    )
+    if response.status_code == 401:
+        return None
+    response.raise_for_status()
+    return response.json()
+
+
+def logout_staff(session_token):
+    response = requests.post(
+        f"{API_BASE}/auth/logout",
+        headers={"X-Session-Token": session_token},
+        timeout=10,
+    )
+    if response.status_code == 401:
+        return False
+    response.raise_for_status()
+    return response.json().get("logged_out", False)
 
 
 def _check(name, status, detail, evidence_ids=(), confidence=None):
@@ -126,36 +162,161 @@ def get_case(shipment_id):
     return response.json()
 
 
-MOCK_AUDIT = {
-    "chain_valid": True,
-    "events": [
-        {"seq": 1, "kind": "EVALUATION", "recorded_at": "2026-10-13T10:00:00+00:00",
-         "payload": {"policy_decision": {"decision": "RECOMMEND_HOLD",
-                     "reason": "Identity check could not be completed."}}},
-        {"seq": 2, "kind": "AGENT_INVESTIGATION", "recorded_at": "2026-10-13T10:00:05+00:00",
-         "payload": {"unresolved_check": "identity_authority",
-                     "reasoning": "Checkpoint lookup returned no delegation record for this handler.",
-                     "tool_call": {"name": "lookup_checkpoint_authorization", "status": "no_match"},
-                     "suggests_resolved": False}},
-    ],
-}
+def can_accept(case):
+    """Mirror the backend's accept guard before offering or recording acceptance."""
+    checks = case.get("checks", [])
+    return (
+        case.get("state", "").upper() == "PENDING"
+        and case.get("decision", {}).get("decision") == "ACCEPT_READY"
+        and len(checks) == 3
+        and {check.get("checker_name") for check in checks} == MANDATORY_CHECKERS
+        and all(check.get("status") == "PASS" for check in checks)
+    )
 
 
-def get_audit(shipment_id):
-    """Full tamper-evident audit trail for a case: EVALUATION/RECHECK/APPROVAL
-    entries written by the backend plus AGENT_INVESTIGATION entries written
-    by the agent (see agent/audit_log.py) -- the human+agent timeline the
-    case detail/timeline view should actually show, not just the latest
-    AgentDecision snapshot.
-    """
+def get_audit_trail(shipment_id):
+    """Read audit entries and chain status for a case."""
     if USE_MOCK:
-        return MOCK_AUDIT
-    response = requests.get(f"{API_BASE}/cases/{shipment_id}/audit", headers=_service_headers(), timeout=10)
+        return {
+            "chain_valid": True,
+            "events": st.session_state.get("audit_events", {}).get(shipment_id, []),
+        }
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/audit",
+        headers=_service_headers(),
+        timeout=10,
+    )
     response.raise_for_status()
     return response.json()
 
 
-def save_approval(case, action, reason, operator):
+def get_pending_approvals(shipment_id):
+    """Operator-facing summary of unfinalized two-person decisions for a case.
+
+    Returns a list (not a single value) because the backend allows reject
+    and escalate to be pending at the same time -- each is its own row keyed
+    by (shipment_id, case_version, action, operator_id). Each item has
+    "action", "operator_id" and "created_at".
+    """
+    if USE_MOCK:
+        return st.session_state.get("pending_approvals", {}).get(shipment_id, [])
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/approvals/pending",
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json().get("approvals", [])
+
+
+def get_audit(shipment_id):
+    """Compatibility alias for the audit helper used by the main branch."""
+    return get_audit_trail(shipment_id)
+
+
+def get_geofence(shipment_id):
+    """Fetch trusted checkpoint coordinates and radii for a case."""
+    if USE_MOCK:
+        return {"shipment_id": shipment_id, "checkpoints": []}
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/geofence",
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_tamper_demo(shipment_id, seq):
+    """Read-only 'what if this entry were edited?' demonstration for the
+    hash-chain visualizer. Never mutates the real audit log either in mock
+    mode or against the live backend -- see backend/audit.py's
+    simulate_tamper for how the real version recomputes the actual chain.
+    """
+    if USE_MOCK:
+        events = st.session_state.get("audit_events", {}).get(shipment_id, [])
+        later = [e.get("seq") for e in events if e.get("seq", 0) > seq]
+        return {
+            "tampered_seq": seq,
+            "diverges_at_seq": seq,
+            "chain_would_still_verify": False,
+            "note": "Demo mode has no real hash chain to recompute, so this illustrates the "
+                    "concept only: editing one entry's payload changes its hash, and every "
+                    "later entry's stored link to it (" + (f"seq {later}" if later else "none here") +
+                    ") would then fail to match.",
+        }
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/audit/tamper-demo",
+        params={"seq": seq},
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def get_investigation_count(cases):
+    """Count recorded investigation events across the visible case list.
+
+    This fetches the audit trail once PER CASE (an N+1 pattern) just for a
+    header metric, which is the single most expensive thing the main page
+    does on every rerun. Short-lived caching trades up-to-5-seconds staleness
+    on this one display-only number for a much snappier page -- it never
+    affects what any decision or approval actually sees, since those always
+    read fresh.
+    """
+    count = 0
+    for case in cases:
+        try:
+            audit = get_audit_trail(case["shipment_id"])
+        except requests.RequestException:
+            continue
+        count += sum(
+            str(event.get("kind", "")).upper() == "AGENT_INVESTIGATION"
+            for event in audit.get("events", [])
+        )
+    return count
+
+
+def investigate_case(shipment_id):
+    """Run one advisory investigation pass and return its result."""
+    if USE_MOCK:
+        case = next(c for c in _mock_store() if c["shipment_id"] == shipment_id)
+        unresolved = list(case.get("decision", {}).get("unresolved_checks", []))
+        investigation = {
+            "shipment_id": shipment_id,
+            "unresolved_check": unresolved[0] if unresolved else None,
+            "tool_call": None,
+            "reasoning": "Mock investigation: review the unresolved checks and supporting evidence.",
+            "unresolved_questions": unresolved,
+            "suggests_resolved": False,
+            "injection_signal": None,
+        }
+        audit_events = st.session_state.setdefault("audit_events", {})
+        events = audit_events.setdefault(shipment_id, [])
+        events.append({"seq": len(events) + 1, "shipment_id": shipment_id,
+                       "kind": "AGENT_INVESTIGATION",
+                       "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                       "payload": investigation})
+        return {"shipment_id": shipment_id, "case_version": case["version"],
+                "audit_logged": True, "recheck_requested": False,
+                "recheck_error": None, "recheck_case_version": None,
+                "investigation": investigation}
+    response = requests.post(
+        f"{API_BASE}/cases/{shipment_id}/investigate",
+        headers=_service_headers(),
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def save_approval(case, action, reason, operator, supervisor_token=None):
+    if case.get("state", "").upper() != "PENDING":
+        raise ValueError("Only pending cases can receive an approval decision.")
+    if action == "accept" and not can_accept(case):
+        raise ValueError("Accept is allowed only when all three mandatory checks pass and the backend decision is ACCEPT_READY.")
     record = {
         "action": action,
         "expected_case_version": case["version"],
@@ -163,6 +324,30 @@ def save_approval(case, action, reason, operator):
         "approval_request_id": f"dashboard-{case['shipment_id']}-{dt.datetime.now().timestamp()}",
     }
     if USE_MOCK:
+        if not reason.strip():
+            raise ValueError("A reason is required.")
+        pending_all = st.session_state.setdefault("pending_approvals", {})
+        pending_list = pending_all.get(case["shipment_id"], [])
+        if action in DUAL_APPROVAL_ACTIONS:
+            same_action = [p for p in pending_list if p["action"] == action]
+            if any(p["operator_id"] == operator for p in same_action):
+                raise ValueError(f"You already requested '{action}' on this case; "
+                                  "a different operator must confirm it before it is final.")
+            if not same_action:
+                pending_list.append({
+                    "action": action, "operator_id": operator,
+                    "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                })
+                pending_all[case["shipment_id"]] = pending_list
+                return dict(case)  # unchanged, still PENDING; not yet finalized
+            # A second, different operator confirming an existing request --
+            # this finalizes it. Both actions and versions can coexist, so only
+            # the matching action's entries are cleared.
+            pending_all[case["shipment_id"]] = [p for p in pending_list if p["action"] != action]
+        elif pending_list:
+            names = ", ".join(f"'{p['action']}' by {p['operator_id']}" for p in pending_list)
+            raise ValueError(f"A pending request ({names}) is awaiting a second operator's "
+                              "confirmation; resolve it before any other action.")
         approval = {
             "approval_id": record["approval_request_id"],
             "shipment_id": case["shipment_id"],
@@ -176,9 +361,10 @@ def save_approval(case, action, reason, operator):
         case["state"] = {"accept": "accepted", "hold": "flagged",
                           "reject": "rejected", "escalate": "escalated"}[action]
         return approval
-    if not SUPERVISOR_TOKEN:
-        raise RuntimeError("Set ZT_SUPERVISOR_TOKEN to submit an approval to the backend.")
-    headers = {"X-Operator-Id": operator, "X-Supervisor-Token": SUPERVISOR_TOKEN}
+    token = supervisor_token or SUPERVISOR_TOKEN
+    if not token:
+        raise RuntimeError("Sign in with your staff token before submitting an approval.")
+    headers = {"X-Operator-Id": operator, "X-Supervisor-Token": token}
     response = requests.post(f"{API_BASE}/cases/{case['shipment_id']}/approve", json=record,
                              headers=headers, timeout=10)
     response.raise_for_status()

@@ -252,3 +252,19 @@ def audit_trail(shipment_id: str, _auth: None = Depends(service_auth),
         return {"chain_valid": verify_audit_chain(conn, os.environ.get("ZTRACK_AUDIT_ANCHOR_PATH")),
                 "events": get_audit_trail(shipment_id, conn)}
 
+
+@app.get("/cases/{shipment_id}/audit/tamper-demo")
+def audit_tamper_demo(shipment_id: str, seq: int,
+                      _auth: None = Depends(service_auth), store: Store = Depends(get_store)):
+    """Read-only 'what if this entry were edited?' demo for the hash-chain
+    visualizer. Recomputes the chain in memory with one entry's payload
+    swapped; never writes anything to the real audit log."""
+    from backend.audit import simulate_tamper
+    fake_payload = {"demo": True, "note": "This payload is a what-if shown only by this "
+                                           "read-only endpoint; nothing was written."}
+    with store.connect() as conn:
+        try:
+            return simulate_tamper(conn, shipment_id, seq, fake_payload)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error))
+
