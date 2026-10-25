@@ -7,7 +7,7 @@ import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backend.audit import append_audit, log_approval, setup_audit, verify_audit_chain
@@ -87,6 +87,15 @@ class Store:
                 "operator_id TEXT NOT NULL, "
                 "expires_at TEXT NOT NULL)"
             )
+            conn.execute("""CREATE TABLE IF NOT EXISTS courier_rate_events(
+                courier_id TEXT NOT NULL, recorded_at TEXT NOT NULL)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_courier_rate ON courier_rate_events(courier_id, recorded_at)")
+            conn.execute("""CREATE TABLE IF NOT EXISTS pending_dual_approvals(
+                shipment_id TEXT NOT NULL, case_version INTEGER NOT NULL,
+                action TEXT NOT NULL, operator_id TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE, reason TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(shipment_id, case_version, action, operator_id))""")
             setup_audit(conn)
 
     def seed_trusted(self, manifest: TrustedShipmentRecord, code: TransferCodeRecord) -> None:
@@ -149,6 +158,19 @@ class Store:
                     "SELECT * FROM cases ORDER BY rowid DESC LIMIT ?", (limit,)
                 ).fetchall()
             return [self._from_row(row) for row in rows]
+
+    def enforce_courier_rate_limit(self, courier_id: str, limit: int = 10, window_seconds: int = 60) -> None:
+        """Persistent rolling window shared by all API workers using this SQLite DB."""
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(seconds=window_seconds)).isoformat()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM courier_rate_events WHERE recorded_at <= ?", (cutoff,))
+            count = conn.execute("SELECT COUNT(*) FROM courier_rate_events WHERE courier_id=?",
+                                 (courier_id,)).fetchone()[0]
+            if count >= limit:
+                raise BackendError(429, "Courier evaluation rate limit exceeded; retry later")
+            conn.execute("INSERT INTO courier_rate_events VALUES (?,?)", (courier_id, now.isoformat()))
 
     def evaluate_case(self, event: ShipmentEvent, authenticated_handler_id: str) -> CaseView:
         fp = _fingerprint(event)
@@ -226,6 +248,7 @@ class Store:
                 WHERE shipment_id=? AND state='PENDING'""", (
                 version, json.dumps([x.model_dump(mode="json") for x in checks]),
                 _json(decision), shipment_id))
+            conn.execute("DELETE FROM pending_dual_approvals WHERE shipment_id=?", (shipment_id,))
             append_audit(conn, shipment_id, "RECHECK",
                          {"event_id": case.event.event_id, "case_version": version,
                           "reason": req.reason,
@@ -234,6 +257,15 @@ class Store:
             conn.commit()
             return CaseView(shipment_id=shipment_id, version=version, state="PENDING",
                             event=case.event, checks=checks, decision=decision)
+
+    def pending_approvals(self, shipment_id: str) -> list[dict]:
+        """Operator-facing summary of unfinalized two-person decisions."""
+        case = self.get_case(shipment_id)
+        with self.connect() as conn:
+            rows = conn.execute("""SELECT action,operator_id,created_at FROM pending_dual_approvals
+                WHERE shipment_id=? AND case_version=? ORDER BY created_at""",
+                (shipment_id, case.version)).fetchall()
+        return [dict(row) for row in rows] if case.state == "PENDING" else []
 
     def approve_case(self, shipment_id: str, req: ApprovalRequest, operator_id: str) -> CaseView:
         approval_fp = hashlib.sha256(f"{shipment_id}:{operator_id}:{req.model_dump_json()}".encode()).hexdigest()
@@ -267,6 +299,27 @@ class Store:
             # never refresh a case; use the authenticated /recheck endpoint.
             if checks != case.checks or decision != case.decision:
                 raise BackendError(409, "Evidence or policy has changed; recheck case before approval")
+            if req.action in {"reject", "escalate"}:
+                # Both approvals must refer to this exact shipment, evidence version
+                # and action. A single identity cannot approve twice.
+                prior = conn.execute("""SELECT * FROM pending_dual_approvals
+                    WHERE shipment_id=? AND case_version=? AND action=?""",
+                    (shipment_id, case.version, req.action)).fetchall()
+                if any(item["operator_id"] == operator_id for item in prior):
+                    raise BackendError(409, "A different supervisor must provide the second approval")
+                conn.execute("""INSERT INTO pending_dual_approvals
+                    (shipment_id,case_version,action,operator_id,request_id,reason,created_at)
+                    VALUES (?,?,?,?,?,?,?)""", (shipment_id, case.version, req.action,
+                    operator_id, req.approval_request_id, req.reason, _utc_iso(now)))
+                if not prior:
+                    append_audit(conn, shipment_id, "DUAL_APPROVAL_REQUESTED",
+                                 {"case_version": case.version, "action": req.action,
+                                  "operator_id": operator_id, "request_id": req.approval_request_id})
+                    # Keep case PENDING until an independent supervisor confirms.
+                    conn.commit()
+                    return case
+                # The first approval is only a proposal; the second supervisor
+                # authorizes the final transition after fresh evidence checks.
             if req.action == "accept":
                 if decision.decision != "ACCEPT_READY":
                     raise BackendError(409, "Mandatory evidence is not all PASS; cannot accept")
@@ -303,6 +356,7 @@ class Store:
                 new_state, json.dumps([x.model_dump(mode="json") for x in checks]),
                 _json(decision), _json(record), shipment_id, case.version))
             log_approval(record, conn)
+            conn.execute("DELETE FROM pending_dual_approvals WHERE shipment_id=?", (shipment_id,))
             conn.execute("INSERT INTO seen_approvals VALUES(?,?,?,?)", (
                 req.approval_request_id, shipment_id, approval_fp, _json(updated)))
             conn.commit()
