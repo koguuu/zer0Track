@@ -237,8 +237,17 @@ def get_tamper_demo(shipment_id, seq):
     return response.json()
 
 
+@st.cache_data(ttl=5, show_spinner=False)
 def get_investigation_count(cases):
-    """Count recorded investigation events across the visible case list."""
+    """Count recorded investigation events across the visible case list.
+
+    This fetches the audit trail once PER CASE (an N+1 pattern) just for a
+    header metric, which is the single most expensive thing the main page
+    does on every rerun. Short-lived caching trades up-to-5-seconds staleness
+    on this one display-only number for a much snappier page -- it never
+    affects what any decision or approval actually sees, since those always
+    read fresh.
+    """
     count = 0
     for case in cases:
         try:
