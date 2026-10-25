@@ -198,7 +198,7 @@ if needs_attention:
             ):
                 st.session_state.case_to_open = case["shipment_id"]
 
-left, right = st.columns([1, 1.35], gap="large")
+left, right = st.columns([1.5, 1], gap="large")
 with left:
     st.subheader("Queue pulse", icon=":material/monitoring:")
     chart_data = pd.DataFrame({"Cases": list(counts.values())}, index=[s.title() for s in counts])

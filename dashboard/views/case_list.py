@@ -26,13 +26,14 @@ def render_case_list(cases):
         df,
         hide_index=True,
         width="stretch",
+        height=min(480, 46 + 40 * len(rows)),
         on_select="rerun",
         selection_mode="single-row",
         column_config={
             "Shipment": st.column_config.TextColumn("Shipment", width="medium"),
-            "Status": st.column_config.TextColumn("Status", width="small"),
-            "Handoff": st.column_config.TextColumn("Handoff", width="small"),
-            "Handler": st.column_config.TextColumn("Handler", width="small"),
+            "Status": st.column_config.TextColumn("Status", width="medium"),
+            "Handoff": st.column_config.TextColumn("Handoff", width="medium"),
+            "Handler": st.column_config.TextColumn("Handler", width="medium"),
             "Decision": st.column_config.TextColumn("Agent decision", width="medium"),
         },
     )
