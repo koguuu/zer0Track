@@ -82,6 +82,10 @@ def _show_case_dialog(shipment_id, operator):
     except Exception as error:
         geofence = None
         geofence_error = error
+    try:
+        pending_approvals = data.get_pending_approvals(shipment_id)
+    except Exception:
+        pending_approvals = []
     case_panel, review_panel = st.columns([1.15, 1], gap="large")
     with case_panel:
         render_case_panel(case, audit, geofence, geofence_error)
@@ -93,7 +97,7 @@ def _show_case_dialog(shipment_id, operator):
                 st.session_state[f"investigation_result_{shipment_id}"] = result.get("investigation", result)
             except Exception as error:
                 st.error(f"Investigation failed: {error}")
-        render_approval_form(case, operator, st.session_state.get("staff_supervisor_token"))
+        render_approval_form(case, operator, st.session_state.get("staff_supervisor_token"), pending_approvals)
         render_audit_panel(audit, audit_error, st.session_state.get(f"investigation_result_{shipment_id}"))
 
 st.markdown("""<style>
@@ -198,7 +202,7 @@ if needs_attention:
             ):
                 st.session_state.case_to_open = case["shipment_id"]
 
-left, right = st.columns([1, 1.35], gap="large")
+left, right = st.columns([1.5, 1], gap="large")
 with left:
     st.subheader("Queue pulse", icon=":material/monitoring:")
     chart_data = pd.DataFrame({"Cases": list(counts.values())}, index=[s.title() for s in counts])

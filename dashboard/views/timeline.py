@@ -328,6 +328,51 @@ def render_audit_panel(audit, audit_error=None, investigation_result=None):
                          alt="Audit event sequence and hash-chain links")
             st.caption("Hash prefixes are shown for readability; chain validity is reported above.")
 
+            case_shipment_id = events[0].get("shipment_id") if events else None
+            seq_options = [event.get("seq") for event in events if event.get("seq") is not None]
+            if seq_options and case_shipment_id:
+                st.divider()
+                st.caption("See the detector work: pick an entry below and we'll show what happens "
+                           "if its content had been edited -- read-only, nothing here is changed.")
+                demo_cols = st.columns([2, 1], vertical_alignment="bottom")
+                with demo_cols[0]:
+                    demo_seq = st.selectbox(
+                        "Entry to simulate editing", seq_options,
+                        format_func=lambda s: f"seq {s}",
+                        key=f"tamper_demo_seq_{case_shipment_id}",
+                        label_visibility="collapsed",
+                    )
+                with demo_cols[1]:
+                    run_demo = st.button("Try tampering it", icon=":material/science:",
+                                         key=f"tamper_demo_btn_{case_shipment_id}")
+                if run_demo:
+                    try:
+                        demo = data.get_tamper_demo(case_shipment_id, demo_seq)
+                        if demo.get("chain_would_still_verify"):
+                            st.success("No divergence found -- this entry's edit wouldn't be "
+                                       "detectable this way, which shouldn't happen. Flag this.")
+                        else:
+                            st.error(
+                                f"Detected: editing seq {demo.get('tampered_seq')} breaks hash "
+                                f"verification starting at seq {demo.get('diverges_at_seq')} -- "
+                                "every entry recorded after it no longer matches, because each "
+                                "one's hash is chained to the one before it.",
+                                icon=":material/gpp_bad:",
+                            )
+                        if demo.get("entries"):
+                            st.dataframe(
+                                [{"Seq": e["seq"], "Kind": e.get("kind"),
+                                  "Edited": "yes" if e.get("is_tampered_entry") else "",
+                                  "Still checks out": e.get("chain_link_valid")}
+                                 for e in demo["entries"]],
+                                hide_index=True, width="stretch",
+                                height=min(220, 42 + 36 * len(demo["entries"])),
+                            )
+                        if demo.get("note"):
+                            st.caption(demo["note"])
+                    except Exception as error:
+                        st.error(f"Could not run the demo: {error}")
+
     investigations = [event for event in events
                        if str(event.get("kind", "")).upper() == "AGENT_INVESTIGATION"]
     if not investigations:

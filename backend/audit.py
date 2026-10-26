@@ -102,6 +102,51 @@ def verify_audit_chain(conn: sqlite3.Connection, anchor_path: str | None = None)
     return True
 
 
+def simulate_tamper(conn: sqlite3.Connection, shipment_id: str, seq: int, fake_payload: dict) -> dict:
+    """Read-only 'what if this entry were edited?' recomputation for the UI's
+    hash-chain visualizer. Mirrors verify_audit_chain's exact digest/MAC logic
+    but never writes anything -- it swaps one entry's payload in memory and
+    shows how far the break would propagate.
+    """
+    key = _secret()
+    rows = conn.execute("SELECT * FROM audit_log WHERE shipment_id = ? ORDER BY seq", (shipment_id,)).fetchall()
+    if not any(row["seq"] == seq for row in rows):
+        raise ValueError(f"No audit entry seq={seq} for shipment {shipment_id}")
+
+    fake_payload_text = _canonical(fake_payload)
+    previous = GENESIS
+    diverges_at_seq = None
+    entries = []
+    for row in rows:
+        is_tampered_entry = row["seq"] == seq
+        payload_text = fake_payload_text if is_tampered_entry else row["payload"]
+        msg = _canonical({"shipment_id": row["shipment_id"], "kind": row["kind"],
+                          "recorded_at": row["recorded_at"], "payload": payload_text,
+                          "prev_hash": previous})
+        recomputed_hash = hashlib.sha256(msg.encode()).hexdigest()
+        recomputed_mac = hmac.new(key, recomputed_hash.encode(), hashlib.sha256).hexdigest()
+        prev_hash_matches = row["prev_hash"] == previous
+        hash_matches = hmac.compare_digest(recomputed_hash, row["entry_hash"]) and not is_tampered_entry
+        mac_matches = hmac.compare_digest(recomputed_mac, row["mac"]) and not is_tampered_entry
+        chain_link_valid = prev_hash_matches and hash_matches and mac_matches
+        if not chain_link_valid and diverges_at_seq is None:
+            diverges_at_seq = row["seq"]
+        entries.append({
+            "seq": row["seq"], "kind": row["kind"], "is_tampered_entry": is_tampered_entry,
+            "prev_hash_matches": prev_hash_matches, "hash_matches": hash_matches,
+            "mac_matches": mac_matches, "chain_link_valid": chain_link_valid,
+        })
+        previous = recomputed_hash if is_tampered_entry else row["entry_hash"]
+
+    return {
+        "tampered_seq": seq,
+        "fake_payload": fake_payload,
+        "diverges_at_seq": diverges_at_seq,
+        "entries": entries,
+        "chain_would_still_verify": diverges_at_seq is None,
+    }
+
+
 def export_checkpoint(conn: sqlite3.Connection, path: str) -> dict:
     """Write a signed checkpoint. Store path outside mutable database/storage area."""
     row = conn.execute("SELECT seq, entry_hash FROM audit_log ORDER BY seq DESC LIMIT 1").fetchone()

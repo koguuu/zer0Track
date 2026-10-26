@@ -11,6 +11,7 @@ SERVICE_KEY = os.getenv("ZT_SERVICE_KEY", "")
 OPERATOR_ID = os.getenv("ZT_OPERATOR_ID", "")
 SUPERVISOR_TOKEN = os.getenv("ZT_SUPERVISOR_TOKEN", "")
 MANDATORY_CHECKERS = {"parcel_code_integrity", "identity_authority", "location"}
+DUAL_APPROVAL_ACTIONS = {"escalate", "reject"}
 
 
 def _service_headers():
@@ -176,7 +177,10 @@ def can_accept(case):
 def get_audit_trail(shipment_id):
     """Read audit entries and chain status for a case."""
     if USE_MOCK:
-        return {"chain_valid": True, "events": st.session_state.get("audit_events", {}).get(shipment_id, [])}
+        return {
+            "chain_valid": True,
+            "events": st.session_state.get("audit_events", {}).get(shipment_id, []),
+        }
     response = requests.get(
         f"{API_BASE}/cases/{shipment_id}/audit",
         headers=_service_headers(),
@@ -184,6 +188,25 @@ def get_audit_trail(shipment_id):
     )
     response.raise_for_status()
     return response.json()
+
+
+def get_pending_approvals(shipment_id):
+    """Operator-facing summary of unfinalized two-person decisions for a case.
+
+    Returns a list (not a single value) because the backend allows reject
+    and escalate to be pending at the same time -- each is its own row keyed
+    by (shipment_id, case_version, action, operator_id). Each item has
+    "action", "operator_id" and "created_at".
+    """
+    if USE_MOCK:
+        return st.session_state.get("pending_approvals", {}).get(shipment_id, [])
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/approvals/pending",
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json().get("approvals", [])
 
 
 def get_audit(shipment_id):
@@ -204,8 +227,45 @@ def get_geofence(shipment_id):
     return response.json()
 
 
+def get_tamper_demo(shipment_id, seq):
+    """Read-only 'what if this entry were edited?' demonstration for the
+    hash-chain visualizer. Never mutates the real audit log either in mock
+    mode or against the live backend -- see backend/audit.py's
+    simulate_tamper for how the real version recomputes the actual chain.
+    """
+    if USE_MOCK:
+        events = st.session_state.get("audit_events", {}).get(shipment_id, [])
+        later = [e.get("seq") for e in events if e.get("seq", 0) > seq]
+        return {
+            "tampered_seq": seq,
+            "diverges_at_seq": seq,
+            "chain_would_still_verify": False,
+            "note": "Demo mode has no real hash chain to recompute, so this illustrates the "
+                    "concept only: editing one entry's payload changes its hash, and every "
+                    "later entry's stored link to it (" + (f"seq {later}" if later else "none here") +
+                    ") would then fail to match.",
+        }
+    response = requests.get(
+        f"{API_BASE}/cases/{shipment_id}/audit/tamper-demo",
+        params={"seq": seq},
+        headers=_service_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+@st.cache_data(ttl=5, show_spinner=False)
 def get_investigation_count(cases):
-    """Count recorded investigation events across the visible case list."""
+    """Count recorded investigation events across the visible case list.
+
+    This fetches the audit trail once PER CASE (an N+1 pattern) just for a
+    header metric, which is the single most expensive thing the main page
+    does on every rerun. Short-lived caching trades up-to-5-seconds staleness
+    on this one display-only number for a much snappier page -- it never
+    affects what any decision or approval actually sees, since those always
+    read fresh.
+    """
     count = 0
     for case in cases:
         try:
@@ -266,6 +326,28 @@ def save_approval(case, action, reason, operator, supervisor_token=None):
     if USE_MOCK:
         if not reason.strip():
             raise ValueError("A reason is required.")
+        pending_all = st.session_state.setdefault("pending_approvals", {})
+        pending_list = pending_all.get(case["shipment_id"], [])
+        if action in DUAL_APPROVAL_ACTIONS:
+            same_action = [p for p in pending_list if p["action"] == action]
+            if any(p["operator_id"] == operator for p in same_action):
+                raise ValueError(f"You already requested '{action}' on this case; "
+                                  "a different operator must confirm it before it is final.")
+            if not same_action:
+                pending_list.append({
+                    "action": action, "operator_id": operator,
+                    "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                })
+                pending_all[case["shipment_id"]] = pending_list
+                return dict(case)  # unchanged, still PENDING; not yet finalized
+            # A second, different operator confirming an existing request --
+            # this finalizes it. Both actions and versions can coexist, so only
+            # the matching action's entries are cleared.
+            pending_all[case["shipment_id"]] = [p for p in pending_list if p["action"] != action]
+        elif pending_list:
+            names = ", ".join(f"'{p['action']}' by {p['operator_id']}" for p in pending_list)
+            raise ValueError(f"A pending request ({names}) is awaiting a second operator's "
+                              "confirmation; resolve it before any other action.")
         approval = {
             "approval_id": record["approval_request_id"],
             "shipment_id": case["shipment_id"],
