@@ -77,8 +77,17 @@ def verify_audit_chain(conn: sqlite3.Connection, anchor_path: str | None = None)
             return False
         previous = digest
         last_seq = row["seq"]
-    if anchor_path and Path(anchor_path).exists():
-        data = json.loads(Path(anchor_path).read_text())
+    if anchor_path:
+        if not Path(anchor_path).is_file():
+            return False  # a configured independent anchor must exist
+        try:
+            data = json.loads(Path(anchor_path).read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("seq"), int) or data["seq"] < 0:
+                return False
+            if not isinstance(data.get("hash"), str) or not isinstance(data.get("mac"), str):
+                return False
+        except (OSError, ValueError, TypeError):
+            return False
         anchor_mac = hmac.new(key, f"{data['seq']}:{data['hash']}".encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(anchor_mac, data["mac"]):
             return False

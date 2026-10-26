@@ -147,6 +147,7 @@ def evaluate(shipment_id: str, event: ShipmentEvent,
              handler_id: str = Depends(courier_auth), store: Store = Depends(get_store)):
     if shipment_id != event.shipment_id:
         raise HTTPException(status_code=400, detail="Path shipment ID differs from body")
+    store.enforce_courier_rate_limit(handler_id)
     return store.evaluate_case(event, handler_id)
 
 
@@ -218,11 +219,29 @@ def get_geofence(
                     "radius_m": checkpoint.radius_m,
                 })
 
+    from backend.checkers import _distance_m
+    location = case.event.location
+    for cp in checkpoints:
+        distance = (_distance_m(location.latitude, location.longitude,
+                                cp["latitude"], cp["longitude"])
+                    if location is not None else None)
+        cp["distance_m"] = round(distance, 2) if distance is not None else None
+        cp["within_radius"] = (distance <= cp["radius_m"] if distance is not None else None)
     return {
         "shipment_id": shipment_id,
         "handoff_type": case.event.handoff_type,
         "checkpoints": checkpoints,
+        "reported_location": (location.model_dump(mode="json") if location else None),
+        "location_check_status": next((c.status.value for c in case.checks
+                                       if c.checker_name == "location"), "UNKNOWN"),
     }
+
+
+@app.get("/cases/{shipment_id}/approvals/pending")
+def pending_approvals(shipment_id: str, _auth: None = Depends(service_auth),
+                      store: Store = Depends(get_store)):
+    """Read-only UI state for independent second-supervisor signoff."""
+    return {"shipment_id": shipment_id, "approvals": store.pending_approvals(shipment_id)}
 
 
 @app.get("/cases/{shipment_id}/audit")
