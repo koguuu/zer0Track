@@ -2,21 +2,21 @@
 
 Synthetic evaluation. Pending pipeline rows: 0; adapter errors: 0.
 
-The connected service reports LLM use for 3 rows; confirm against actual provider calls.
+No LLM usage was reported. This run does not establish an LLM benefit.
 
 20 unique synthetic cases reused across 9 configurations; configuration rows are not independent samples.
 
 | Profile | Mode | Evaluated | Detection % | False alerts % | Unsupported accepts | Unresolved | Tools | Mean ms |
 |---|---|---|---|---|---|---|---|---|
-| strict | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.0821 |
-| strict | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 9.2588 |
-| strict | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 9 | 10.3542 |
-| balanced | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.0912 |
-| balanced | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.2363 |
-| balanced | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 15 | 12.9865 |
-| loose | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.1364 |
-| loose | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.2477 |
-| loose | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 15 | 231.9494 |
+| strict | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.1105 |
+| strict | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 7.6296 |
+| strict | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 9 | 31.4807 |
+| balanced | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.1085 |
+| balanced | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.1722 |
+| balanced | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 15 | 27.3606 |
+| loose | scan_only | 20 | 7.14 | 0.0 | 19 | 0 | 0 | 0.0618 |
+| loose | rules_only | 20 | 92.86 | 33.33 | 0 | 7 | 0 | 0.1908 |
+| loose | rules_and_llm | 20 | 92.86 | 33.33 | 0 | 7 | 15 | 24.8589 |
 
 Detection means flagged for verification/review, not proven fraud. Denominators exclude pending cases and adapter failures.
 Proof-quality false alerts and legitimate physical-handoff review burden have different denominators.
