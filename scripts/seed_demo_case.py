@@ -27,6 +27,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
 DATASET = ROOT / "data" / "dataset"
@@ -37,6 +38,10 @@ def _seed_one(store, case_id: str) -> str:
     from backend.models import ShipmentEvent, TransferCodeRecord, TrustedShipmentRecord
 
     fixture = json.loads((DATASET / f"{case_id}.json").read_text())
+
+    shift = datetime.now(timezone.utc) - datetime.fromisoformat("2026-10-11T04:00:00Z".replace("Z", "+00:00"))
+    fixture = _shift_fixture_timestamps(fixture, shift)
+
     ctx = fixture["fixture_context"]
     trusted = TrustedShipmentRecord.model_validate(ctx["trusted_shipment"])
     code = TransferCodeRecord.model_validate(ctx["transfer_code"])
@@ -44,6 +49,17 @@ def _seed_one(store, case_id: str) -> str:
     store.seed_trusted(trusted, code)
     case = store.evaluate_case(event, ctx["authenticated_handler_id"])
     return case.shipment_id
+
+def _shift_fixture_timestamps(data, shift):
+    """Recursively shift every frozen 2026-10-11T... timestamp by `shift`,
+    so a dataset fixture evaluates as fresh no matter when it's seeded."""
+    if isinstance(data, dict):
+        return {k: _shift_fixture_timestamps(v, shift) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_shift_fixture_timestamps(item, shift) for item in data]
+    if isinstance(data, str) and data.startswith("2026-10-11T"):
+        return (datetime.fromisoformat(data.replace("Z", "+00:00")) + shift).isoformat()
+    return data
 
 
 def main(argv=None) -> int:
