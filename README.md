@@ -6,9 +6,9 @@ An AI agent that checks parcel handoff evidence and recommends whether a deliver
 **Event:** GDEX x ANON x UTAR Agentic AI Cybersecurity Hackathon 2026
 **Team:** Raja, Win, Nour, Bhone, Kogu
 
-Full write-up: [`docs/zer0Track_Proposal_Final.pdf`](docs/zer0Track_Proposal_Final.pdf)
-Role breakdown + file/function conventions: [`docs/zer0Track_Role_Outlines.docx`](docs/zer0Track_Role_Outlines.docx)
-Shared data schema (read this before writing any code): [`backend/models.py`](backend/models.py) and [`docs/AGENT_OUTPUT_CONTRACT.md`](docs/AGENT_OUTPUT_CONTRACT.md) — `schema.md` was the old v1 draft and has been removed; it no longer matched the code.
+Full write-up: [`docs/zer0Track.proposal.pdf`](docs/zer0Track.proposal.pdf)
+Pitch deck: [`docs/Zer0Track_pitchdeck_slides.pdf`](docs/Zer0Track_pitchdeck_slides.pdf)
+Role breakdown + file/function conventions: [`docs/zer0Track_Role_Outlines.pdf`](docs/zer0Track_Role_Outlines.pdf)
 
 ## Repo structure
 
